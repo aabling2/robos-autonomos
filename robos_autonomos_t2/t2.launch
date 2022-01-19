@@ -1,0 +1,11 @@
+<launch>
+  <include file="$find(find robos_autonomos_t2)/t2.launch">
+    <arg name="world_name" value="$find(find robos_autonomos_t2)/worlds/world1"
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="true"/>
+    <arg name="recording" value="false"/>
+    <arg name="debug" value="false"/> # Python runtime environment library
+  </include>
+  <node name="demo" pkg="robos_autonomos_t2" type="demo.py" output="screen"></node>
+</launch>
