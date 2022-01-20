@@ -1,0 +1,12 @@
+<launch>
+    <include file="$(find robosaut_t2)/launch/world.launch"></include>
+    <include file="$(find robosaut_t2)/launch/jackal.launch"></include>
+    <node 
+        name="robot_navigation"
+        pkg="robosaut_t2"
+        type="$(find robosaut_t2)/nodes/robot_navigation.py"
+        launch-prefix="gnome-terminal -- sh -c"
+        required="true"
+        output="screen"
+    />
+</launch>

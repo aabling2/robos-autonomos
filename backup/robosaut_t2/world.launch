@@ -1,0 +1,19 @@
+<launch>
+  <include file="$(find robosaut_t2)/world.launch">
+    <arg name="world_name" value="$(find robosaut_t2)/worlds/world1">
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="true"/>
+    <arg name="recording" value="false"/>
+    <arg name="debug" value="false"/>
+  </include>
+  <node name="demo" pkg="robosaut_t2" type="demo.py" output="screen"></node>
+</launch>
+
+<include file="$(find jackal_gazebo)/launch/spawn_jackal.launch">
+  <!-- Optionally configure the spawn position -->
+  <arg name="x" value="$(arg x)"/>
+  <arg name="y" value="$(arg y)"/>
+  <arg name="z" value="$(arg z)"/>
+  <arg name="yaw" value="$(arg yaw)"/>
+</include>
