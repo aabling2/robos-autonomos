@@ -2,11 +2,20 @@
     <include file="$(find robosaut_t2)/launch/world.launch"></include>
     <include file="$(find robosaut_t2)/launch/jackal.launch"></include>
     <node 
-        name="robot_navigation"
+        name="robot_controller"
         pkg="robosaut_t2"
-        type="$(find robosaut_t2)/nodes/robot_navigation.py"
-        launch-prefix="gnome-terminal -- sh -c"
+        type="robot_controller.py"
+        launch-prefix="xterm -e"
         required="true"
         output="screen"
+    >
+    <remap from="scan" to="front/scan"/>
+    </node>
+    <node
+        name="rqt_graph"
+        pkg="rqt_graph"
+        type="rqt_graph"
+        output="screen"
+        required="true"
     />
 </launch>

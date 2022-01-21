@@ -1,5 +1,4 @@
 <launch>
-    <env name="JACKAL_LASER" value="1"/>
     <arg name="platform" value="jackal"/>
     <arg name="config" value="front_laser"/>
     <arg name="x" default="0"/>
@@ -12,5 +11,6 @@
         <arg name="y" value="$(arg y)"/>
         <arg name="z" value="$(arg z)"/>
         <arg name="yaw" value="$(arg yaw)"/>
+        <arg name="joystick" default="false"/>
     </include>
 </launch>
