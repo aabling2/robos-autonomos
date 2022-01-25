@@ -63,10 +63,9 @@ class Controller():
         self.robot_state = "turn left"
 
         # Distância a ser mantida da parede
-        self.dist_wall_close = 0.5  # metros
-        self.dist_wall_thresh = 0.7  # metros
-
-        self.search_wall = True
+        self.dist_wall_low = 0.5  # metros
+        self.dist_wall_med = 0.7  # metros
+        self.dist_wall_high = 0.75  # metros
 
     # Converte quaternions para ângulos de Euler
     def euler_from_quaternion(self, x, y, z, w):
@@ -139,45 +138,69 @@ class Controller():
         msg.angular.z = 0.0
 
         # Distância da parede
-        d1 = self.dist_wall_close
-        d2 = self.dist_wall_thresh
+        d1 = self.dist_wall_low
+        d2 = self.dist_wall_med
+        d3 = self.dist_wall_high
 
-        if self.search_wall:
-            self.robot_state = "searching wall..."
-            if self.front_dist > d2 and self.rightfront_dist > d2:
-                msg.linear.x = self.speed_linear_fast
-                if self.rightfront_dist < self.front_dist:
-                    msg.angular.z = -self.speed_angular_slow
-                else:
-                    msg.angular.z = 0
-            else:
-                self.search_wall = False
+        if self.leftfront_dist < d1 or self.front_dist < d1 or self.rightfront_dist < d1:
+            self.robot_state = "stop"
+            msg.linear.x = 0
+        elif self.leftfront_dist < d2 or self.front_dist < d2 or self.rightfront_dist < d2:
+            self.robot_state = "slow"
+            msg.linear.x = self.speed_linear_slow
         else:
-            if self.leftfront_dist < d1 or self.front_dist < d1 or\
-                    self.rightfront_dist < d1:
-                self.robot_state = "stop"
-                msg.linear.x = 0
-            elif self.leftfront_dist < d2 or self.front_dist < d2 or\
-                    self.rightfront_dist < d2:
-                self.robot_state = "slow"
-                msg.linear.x = self.speed_linear_slow
-            else:
-                self.robot_state = "fast"
-                msg.linear.x = self.speed_linear_fast
+            self.robot_state = "fast"
+            msg.linear.x = self.speed_linear_fast
 
-            if self.front_dist < d2:
-                self.robot_state += " turning fast inv."
-                msg.angular.z = self.speed_angular_fast
-            elif self.right_dist < d1 or self.rightfront_dist < d2:
-                self.robot_state += " turning slow inv."
-                msg.angular.z = self.speed_angular_slow
-            elif self.front_dist > d1+d2 and self.rightfront_dist > d1+d2 and\
-                    self.right_dist > d1+d2:
-                self.robot_state += " turning fast to wall"
+        if self.front_dist < d2:
+            self.robot_state += " turning fast inv."
+            msg.angular.z = self.speed_angular_fast
+        elif self.right_dist < d1 or self.rightfront_dist < d2:
+            self.robot_state += " turning slow inv."
+            msg.angular.z = self.speed_angular_slow
+        else:
+            self.robot_state += " turning slow to wall"
+            msg.angular.z = -self.speed_angular_slow
+
+        """if self.front_dist > d:
+            if self.leftfront_dist > d and self.rightfront_dist > d:
+                self.robot_state = "search for wall"
+                msg.linear.x = self.speed_linear_fast
                 msg.angular.z = -self.speed_angular_fast
-            else:
-                self.robot_state += " turning slow to wall"
-                msg.angular.z = -self.speed_angular_slow
+
+            elif self.leftfront_dist > d and self.rightfront_dist < d:
+                self.robot_state = "follow wall"
+                msg.linear.x = self.speed_linear_fast
+                msg.angular.z = -self.speed_angular_fast
+
+            elif self.leftfront_dist < d and self.rightfront_dist > d:
+                self.robot_state = "search for wall"
+                msg.linear.x = self.speed_linear_slow
+                # msg.angular.z = -self.speed_angular_slow
+
+            elif self.leftfront_dist < d and self.rightfront_dist < d:
+                self.robot_state = "search for wall"
+                msg.linear.x = self.speed_linear_slow
+                # msg.angular.z = -self.speed_angular_slow
+
+        else:
+            msg.linear.x = self.speed_linear_slow
+            if self.leftfront_dist > d and self.rightfront_dist > d:
+                self.robot_state = "turn left"
+                # msg.angular.z = self.speed_angular_slow
+
+            elif self.leftfront_dist > d and self.rightfront_dist < d:
+                self.robot_state = "turn left"
+                # msg.angular.z = -self.speed_angular_slow
+
+            elif self.leftfront_dist < d and self.rightfront_dist > d:
+                self.robot_state = "turn left"
+                msg.linear.x = 0
+                # msg.angular.z = self.speed_angular_slow
+
+            elif self.leftfront_dist < d and self.rightfront_dist < d:
+                self.robot_state = "turn left"
+                # msg.angular.z = 0"""
 
         # Envia mensagem da velocidade atualizada
         self.publisher.publish(msg)
