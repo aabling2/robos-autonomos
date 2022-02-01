@@ -48,16 +48,19 @@ class Controller():
         self.rightfront_dist = 99999.
         self.right_dist = 99999.
 
-        # Posição inicial do robô
+        # Posição do robô
+        self.start_x = 0.0
+        self.start_y = 0.0
+        self.start_yaw = 0.0
         self.current_x = 0.0
         self.current_y = 0.0
         self.current_yaw = 0.0
 
         # Velocidades
-        self.speed_linear_fast = 0.15  # m/s
-        self.speed_linear_slow = 0.07  # m/s
+        self.speed_linear_fast = 0.20  # m/s
+        self.speed_linear_slow = 0.1  # m/s
         self.speed_angular_fast = 2.0  # rad/s
-        self.speed_angular_slow = 0.1  # rad/s
+        self.speed_angular_slow = 0.3  # rad/s
 
         # Estado do seguidor de parede
         self.robot_state = "turn left"
@@ -67,6 +70,7 @@ class Controller():
         self.dist_wall_thresh = 0.7  # metros
 
         self.search_wall = True
+        self.track_wall = False
 
     # Converte quaternions para ângulos de Euler
     def euler_from_quaternion(self, x, y, z, w):
@@ -99,6 +103,10 @@ class Controller():
         obs_state_vector_x_y_yaw = [
             msg.pose.pose.position.x, msg.pose.pose.position.y, yaw]
 
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
+        self.current_yaw = yaw
+
     # Callback das velocidades lineares e angulares
     # em '/jackal_velocity_controller/cmd_vel'
     def velocity_callback(self, msg):
@@ -119,13 +127,6 @@ class Controller():
         self.front_dist = msg.ranges[360]  # 135
         self.rightfront_dist = msg.ranges[240]  # 90
         self.right_dist = msg.ranges[120]  # 45
-
-    # Atualização do estado do robô na referência do frame global
-    def state_estimate_callback(self, msg):
-        curr_state = msg.data
-        self.current_x = curr_state[0]
-        self.current_y = curr_state[1]
-        self.current_yaw = curr_state[2]
 
     # Segue parede
     def follow_wall(self):
@@ -152,6 +153,23 @@ class Controller():
                     msg.angular.z = 0
             else:
                 self.search_wall = False
+                self.start_x = self.current_x
+                self.start_y = self.current_y
+                self.start_yaw = self.current_yaw
+
+        elif (
+                abs(self.current_x - self.start_x) > 15 and
+                abs(self.current_y - self.start_y) > 15 and
+                abs(self.current_yaw - self.start_yaw) > 15):
+            self.track_wall = True
+
+        elif self.track_wall and (
+                abs(self.current_x - self.start_x) < 10 and
+                abs(self.current_y - self.start_y) < 10 and
+                abs(self.current_yaw - self.start_yaw) < 10):
+            msg.linear.x = 0
+            msg.angular.z = 0
+            self.robot_state = "finish"
         else:
             if self.leftfront_dist < d1 or self.front_dist < d1 or\
                     self.rightfront_dist < d1:
@@ -165,7 +183,7 @@ class Controller():
                 self.robot_state = "fast"
                 msg.linear.x = self.speed_linear_fast
 
-            if self.front_dist < d2:
+            if self.front_dist < d2 or self.rightfront_dist < d1:
                 self.robot_state += " turning fast inv."
                 msg.angular.z = self.speed_angular_fast
             elif self.right_dist < d1 or self.rightfront_dist < d2:
