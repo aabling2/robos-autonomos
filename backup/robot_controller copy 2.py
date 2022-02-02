@@ -14,13 +14,13 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 
 # Nuvem de pontos do laser
-from geometry_msgs.msg import Point
-from sensor_msgs.msg import PointCloud
+"""from geometry_msgs.msg import Point
+from sensor_msgs.msg import PointCloud"""
 import std_msgs.msg
-# import pcl
+import pcl
 from sensor_msgs.msg import PointCloud2
 import sensor_msgs.point_cloud2 as pc2
-# import ros_numpy
+import ros_numpy
 
 
 class Controller():
@@ -52,14 +52,14 @@ class Controller():
             queue_size=10)
 
         #teste
-        self.map_publisher = rospy.Publisher(
-            name='/robosaut_costmap',
-            data_class=PointCloud,
+        """self.map_publisher = rospy.Publisher(
+            name='/velodyne_points',
+            data_class=PointCloud2,
             callback=self.mapping_callback,
-            queue_size=10)
-        self.map_table = PointCloud()
-        self.map_header = std_msgs.msg.Header()
-        self.map_header.stamp = rospy.Time.now()
+            queue_size=10)"""
+        # self.map_table = PointCloud()
+        # self.map_header = std_msgs.msg.Header()
+        # self.map_header.stamp = rospy.Time.now()
 
         # Posições de amostragem para LaserScan e distâncias iniciais
         self.left_dist = 99999.
@@ -151,29 +151,30 @@ class Controller():
 
     def mapping_callback(self, data):
 
-        n_points = 10
+        """n_points = 10
         self.map_table.header = self.map_header
         self.map_table.points = n_points
         self.map_table.channels = 3
-        point = Point()
+        point = Point()"""
 
-        for i in range(0, n_points):
+        """for i in range(0, n_points):
 
             point.x = self.q1_v[i]
             point.y = self.q2_v[i]
             point.z = self.tges[i]
             self.map_table.points[i] = point.x
             self.map_table.points[i] = point.y
-            self.map_table.points[i] = point.z
+            self.map_table.points[i] = point.z"""
 
         # self.map_publisher.publish(self.map_table)
 
-        """pc = ros_numpy.numpify(data)
+        pc = ros_numpy.numpify(data)
         points=np.zeros((pc.shape[0],3))
         points[:,0]=pc['x']
         points[:,1]=pc['y']
         points[:,2]=pc['z']
-        p = pcl.PointCloud(np.array(points, dtype=np.float32))"""
+        p = pcl.PointCloud(np.array(points, dtype=np.float32))
+
     # Segue parede
     def follow_wall(self):
         # Cria mensagem Twist

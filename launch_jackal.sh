@@ -10,4 +10,5 @@ export JACKAL_LASER=1
 
 chmod +x $(rospack find robosaut_t2)/nodes/*.py
 roslaunch robosaut_t2 demo.launch &
+# rosrun map_server map_saver -f area_map &
 wait
