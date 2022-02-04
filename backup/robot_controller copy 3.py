@@ -4,7 +4,6 @@ import math
 import rospy
 import numpy as np
 
-
 # Odometria contendo posição, orientação, vel. linear e angular
 from nav_msgs.msg import Odometry
 
@@ -14,10 +13,14 @@ from geometry_msgs.msg import Twist
 # Amostras de distâncias obtidas pelo LaserScan
 from sensor_msgs.msg import LaserScan
 
-# Mapping
-from ekf_slam.robot import Robot
-from ekf_slam.plotmap import plotMap, plotEstimate, plotMeasurement, plotError
-from ekf_slam.ekf import predict, update
+# Nuvem de pontos do laser
+from geometry_msgs.msg import Point
+from sensor_msgs.msg import PointCloud
+import std_msgs.msg
+# import pcl
+from sensor_msgs.msg import PointCloud2
+import sensor_msgs.point_cloud2 as pc2
+# import ros_numpy
 
 
 class Controller():
@@ -47,6 +50,16 @@ class Controller():
             name='/jackal_velocity_controller/cmd_vel',
             data_class=Twist,
             queue_size=10)
+
+        #teste
+        self.map_publisher = rospy.Publisher(
+            name='/robosaut_costmap',
+            data_class=PointCloud,
+            callback=self.mapping_callback,
+            queue_size=10)
+        self.map_table = PointCloud()
+        self.map_header = std_msgs.msg.Header()
+        self.map_header.stamp = rospy.Time.now()
 
         # Posições de amostragem para LaserScan e distâncias iniciais
         self.left_dist = 99999.
@@ -136,6 +149,32 @@ class Controller():
         self.rightfront_dist = msg.ranges[240]  # 90
         self.right_dist = msg.ranges[120]  # 45
 
+    def mapping_callback(self, data):
+
+        n_points = 10
+        self.map_table.header = self.map_header
+        self.map_table.points = n_points
+        self.map_table.channels = 3
+        point = Point()
+
+        for i in range(0, n_points):
+
+            point.x = self.q1_v[i]
+            point.y = self.q2_v[i]
+            point.z = self.tges[i]
+            self.map_table.points[i] = point.x
+            self.map_table.points[i] = point.y
+            self.map_table.points[i] = point.z
+
+        # self.map_publisher.publish(self.map_table)
+
+        """pc = ros_numpy.numpify(data)
+        points=np.zeros((pc.shape[0],3))
+        points[:,0]=pc['x']
+        points[:,1]=pc['y']
+        points[:,2]=pc['z']
+        p = pcl.PointCloud(np.array(points, dtype=np.float32))"""
+
     # Segue parede
     def follow_wall(self):
         # Cria mensagem Twist
@@ -208,6 +247,8 @@ class Controller():
         # Envia mensagem da velocidade atualizada
         self.velocity_publisher.publish(msg)
 
+        # self.mapping()
+
         # Mostra distâncias detectadas pelo LaserScan
         rospy.loginfo(
             " 180=" + str(round(self.left_dist, 2)) +
@@ -219,142 +260,10 @@ class Controller():
         )
 
 
-class EKFMapping():
-    def init(self):
-        self.num_landmarks = 15
-        self.landmarks = np.random.default_rng(seed=11).random((self.num_landmarks, 2))
-
-    def odometry_model(self, pose, odometry):
-        rx, ry, rθ = pose
-        direction = rθ + odometry.rot1
-        rx += odometry.trans * math.cos(direction)
-        ry += odometry.trans * math.sin(direction)
-        rθ += odometry.rot1 + odometry.rot2
-        # rθ = rem2pi(rθ, RoundNearest)  # Round to [-π, π]
-        return [rx, ry, rθ]
-
-    def observation_model(self, robot_pose, range_bearing):
-        rx, ry, rθ = robot_pose
-        range, bearing = range_bearing.range, range_bearing.bearing
-        mx = rx + range * math.cos(bearing + rθ)
-        my = ry + range * math.sin(bearing + rθ)
-        return [mx, my]
-
-    def belief_init(self, num_landmarks):
-        """μ = Vector{Union{Float32, Missing}}(missing, 3 + 2*num_landmarks)
-        μ[1:3] .= 0
-        Σ = zeros(Float32, 3+2*num_landmarks, 3+2*num_landmarks)
-        Σ[diagind(Σ)[1:3]] .= 0
-        Σ[diagind(Σ)[4:end]] .= 1000"""
-
-        # return Belief(μ, Symmetric(Σ))
-
-        belief = 1e6*np.eye(2*self.num_landmarks+3)
-        belief[:3, :3] = np.zeros((3, 3))
-
-        return belief
-
-    def prediction_step(self, belief, odometry):
-        # Compute the new mu based on the noise-free (odometry-based) motion model
-        rx, ry, rθ = belief.mean[1:3]
-        belief.mean[1:3] = standard_odometry_model([rx, ry, rθ], odometry)
-
-        # Compute the 3x3 Jacobian Gx of the motion model
-        Gx = Matrix{Float32}(I, 3, 3)
-        heading = rθ + odometry.rot1
-        Gx[1, 3] -= odometry.trans * sin(heading)  # ∂x'/∂θ
-        Gx[2, 3] += odometry.trans * cos(heading)  # ∂y'/∂θ
-
-        # Motion noise
-        Rx = Diagonal{Float32}([0.1, 0.1, 0.01])
-
-        # Compute the predicted sigma after incorporating the motion
-        Σxx = belief.covariance[1:3, 1:3]
-        Σxm = belief.covariance[1:3, 4:end]
-
-        Σ = Matrix(belief.covariance)
-        Σ[1:3, 1:3] = Gx * Σxx * Gx' + Rx
-        Σ[1:3, 4:end] = Gx * Σxm
-        belief.covariance = Symmetric(Σ)
-
-    def correction_step(self, belief, range_bearings):
-        rx, ry, rθ = belief.mean[1:3]
-
-        num_range_bearings = length(range_bearings)
-        num_dim_state = length(belief.mean)
-
-        H = Matrix{Float32}(undef, 2 * num_range_bearings, num_dim_state) # Jacobian matrix ∂ẑ/∂(rx,ry)
-        zs, ẑs = [], []  # true and predicted observations
-
-        for (i, range_bearing) in enumerate(range_bearings)
-            mid = range_bearing.landmark_id
-            if ismissing(belief.mean[2*mid+2])
-                # Initialize its pose in mu based on the measurement and the current robot pose
-                mx, my = range_bearing_model([rx, ry, rθ], range_bearing)
-                belief.mean[2*mid+2:2*mid+3] = [mx, my]
-            end
-            # Add the landmark measurement to the Z vector
-            zs = [zs; range_bearing.range; range_bearing.bearing]
-
-            # Use the current estimate of the landmark pose
-            # to compute the corresponding expected measurement in z̄:
-            mx, my = belief.mean[2*mid+2:2*mid+3]
-            δ = [mx - rx, my - ry]
-            q = dot(δ, δ)
-            sqrtq = sqrt(q)
-
-            ẑs = [ẑs; sqrtq; atan(δ[2], δ[1]) - rθ]
-
-            # Compute the Jacobian Hi of the measurement function h for this observation
-            δx, δy = δ
-            Hi = zeros(Float32, 2, num_dim_state)
-            Hi[1:2, 1:3] = [
-                -sqrtq * δx  -sqrtq * δy   0;
-                δy           -δx           -q
-            ] / q
-            Hi[1:2, 2*mid+2:2*mid+3] = [
-                sqrtq * δx sqrtq * δy;
-                -δy δx
-            ] / q
-
-            # Augment H with the new Hi
-            H[2*i-1:2*i, 1:end] = Hi
-
-        # Construct the sensor noise matrix Q
-        Q = Diagonal{Float32}(ones(2 * num_range_bearings) * 0.01)
-
-        # Compute the Kalman gain K
-        K = belief.covariance * H' * inv(H * belief.covariance * H' + Q)
-
-        # Compute the difference between the expected and recorded measurements.
-        Δz = zs - ẑs
-        # Normalize the bearings
-        Δz[2:2:end] = map(bearing->rem2pi(bearing, RoundNearest), Δz[2:2:end])
-
-        # Finish the correction step by computing the new mu and sigma.
-        belief.mean += K * Δz
-        I = Diagonal{Float32}(ones(num_dim_state))
-        belief.covariance = Symmetric((I - K * H) * belief.covariance)
-
-        # Normalize theta in the robot pose.
-        belief.mean[3] = rem2pi(belief.mean[3], RoundNearest)
-
-    def update_map(self, odometry, range_bearings):
-        # believes = []
-        belief = self.belief_init(self.num_landmarks)
-        self.prediction_step(belief, odometry)
-        self.correction_step(belief, range_bearings)
-        # push!(believes, deepcopy(belief))
-
-        # canvas = make_canvas(-1, -1, 11, 11)
-        # HTML(animate_kalman_state(canvas, believes, range_bearingss, landmarks).to_jshtml())
-
-
 def main():
     # Cria node do controlador do robô
     rospy.init_node('robosaut_controller', anonymous=True)
     controller = Controller()
-    mapping = EKFMapping()
 
     rate = rospy.Rate(10)  # 10hz
 
@@ -368,14 +277,6 @@ def main():
 
     while not rospy.is_shutdown() or controller.finish:
         controller.follow_wall()
-        mapping.update_map(
-            odometry=[
-                controller.current_x,
-                controller.current_y,
-                controller.current_yaw
-            ],
-            range_bearings=[]
-        )
         rate.sleep()
 
     # Aguarda finalizar o processo

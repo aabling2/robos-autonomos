@@ -221,8 +221,93 @@ class Controller():
 
 class EKFMapping():
     def init(self):
-        self.num_landmarks = 15
-        self.landmarks = np.random.default_rng(seed=11).random((self.num_landmarks, 2))
+        n = 50  # number of static landmarks
+        self.mapsize = 40
+        landmark_xy = self.mapsize*(np.random.rand(n, 2) - 0.5)
+        landmark_id = np.transpose([np.linspace(0, n-1, n, dtype='uint16')])
+        ls = np.append(landmark_xy, landmark_id, axis=1)
+
+        # In[Generate dynamic landmarks]
+        k = 0  # number of dynamic landmarks
+        vm = 5  # velocity multiplier
+        landmark_xy = self.mapsize*(np.random.rand(k, 2) - 0.5)
+        landmark_v = np.random.rand(k, 2) - 0.5
+        landmark_id = np.transpose([np.linspace(n, n+k-1, k, dtype='uint16')])
+        ld = np.append(landmark_xy, landmark_id, axis=1)
+        ld = np.append(ld, landmark_v, axis=1)
+
+        # In[Define and initialize robot parameters]
+        fov = 120
+        self.Rt = 5*np.array([
+            [0.1, 0, 0],
+            [0, 0.01, 0],
+            [0, 0, 0.01]])
+        Qt = np.array([
+            [0.01, 0],
+            [0, 0.01]])
+
+        x_init = [0, 0, 0.5*np.pi]
+
+        self.r1 = Robot(x_init, fov, self.Rt, Qt)
+
+        # In[Generate inputs and measurements]
+
+        steps = 30
+        stepsize = 3
+        curviness = 0.5
+
+        x_true = [x_init]
+        obs = []
+
+        # generate input sequence
+        u = np.zeros((steps, 3))
+        u[:, 0] = stepsize
+        u[4:12, 1] = curviness
+        u[18:26, 1] = curviness
+
+        # Generate random trajectory instead
+        # u = np.append(stepsize*np.ones((steps,1),dtype='uint8'),
+        #              curviness*np.random.randn(steps,2),
+        #              axis=1)
+
+        # generate dynamic landmark trajectories
+        ldt = ld
+        for j in range(1, steps):
+            # update dynamic landmarks
+            F = np.array([
+                [1, 0, 0, vm, 0],
+                [0, 1, 0, 0, vm],
+                [0, 0, 1, 0, 0],
+                [0, 0, 0, 1, 0],
+                [0, 0, 0, 0, 1]])
+            for i in range(len(ld)):
+                ld[i, :] = F.dot(ld[i, :].T).T
+            ldt = np.dstack((ldt, ld))
+
+        # generate robot states and observations
+        for movement, t in zip(u, range(steps)):
+            landmarks = np.append(ls, ldt[:, :3, t], axis=0)
+
+            # process robot movement
+            x_true.append(self.r1.move(movement))
+            obs.append(self.r1.sense(landmarks))
+
+        plotMap(ls, ldt, x_true, self.r1, self.mapsize)
+
+        # In[Estimation]
+
+        # Initialize state matrices
+        inf = 1e6
+
+        self.mu = np.append(np.array([x_init]).T, np.zeros((2*(n+k), 1)), axis=0)
+        self.mu_new = self.mu
+
+        self.cov = inf*np.eye(2*(n+k)+3)
+        self.cov[:3, :3] = np.zeros((3, 3))
+
+        c_prob = 0.5*np.ones((n+k, 1))
+
+        plotEstimate(self.mu, self.cov, self.r1, self.mapsize)
 
     def odometry_model(self, pose, odometry):
         rx, ry, rθ = pose
@@ -230,7 +315,7 @@ class EKFMapping():
         rx += odometry.trans * math.cos(direction)
         ry += odometry.trans * math.sin(direction)
         rθ += odometry.rot1 + odometry.rot2
-        # rθ = rem2pi(rθ, RoundNearest)  # Round to [-π, π]
+        rθ = rem2pi(rθ, RoundNearest)  # Round to [-π, π]
         return [rx, ry, rθ]
 
     def observation_model(self, robot_pose, range_bearing):
@@ -240,114 +325,119 @@ class EKFMapping():
         my = ry + range * math.sin(bearing + rθ)
         return [mx, my]
 
-    def belief_init(self, num_landmarks):
-        """μ = Vector{Union{Float32, Missing}}(missing, 3 + 2*num_landmarks)
+    def belief_init(num_landmarks):
+        μ = Vector{Union{Float32, Missing}}(missing, 3 + 2*num_landmarks)
         μ[1:3] .= 0
         Σ = zeros(Float32, 3+2*num_landmarks, 3+2*num_landmarks)
         Σ[diagind(Σ)[1:3]] .= 0
-        Σ[diagind(Σ)[4:end]] .= 1000"""
+        Σ[diagind(Σ)[4:end]] .= 1000
 
-        # return Belief(μ, Symmetric(Σ))
+        return Belief(μ, Symmetric(Σ))
 
-        belief = 1e6*np.eye(2*self.num_landmarks+3)
-        belief[:3, :3] = np.zeros((3, 3))
+function prediction_step(belief, odometry)
+    # Compute the new mu based on the noise-free (odometry-based) motion model
+    rx, ry, rθ = belief.mean[1:3]
+    belief.mean[1:3] = standard_odometry_model([rx, ry, rθ], odometry)
 
-        return belief
+    # Compute the 3x3 Jacobian Gx of the motion model
+    Gx = Matrix{Float32}(I, 3, 3)
+    heading = rθ + odometry.rot1
+    Gx[1, 3] -= odometry.trans * sin(heading)  # ∂x'/∂θ
+    Gx[2, 3] += odometry.trans * cos(heading)  # ∂y'/∂θ
 
-    def prediction_step(self, belief, odometry):
-        # Compute the new mu based on the noise-free (odometry-based) motion model
-        rx, ry, rθ = belief.mean[1:3]
-        belief.mean[1:3] = standard_odometry_model([rx, ry, rθ], odometry)
+    # Motion noise
+    Rx = Diagonal{Float32}([0.1, 0.1, 0.01])
 
-        # Compute the 3x3 Jacobian Gx of the motion model
-        Gx = Matrix{Float32}(I, 3, 3)
-        heading = rθ + odometry.rot1
-        Gx[1, 3] -= odometry.trans * sin(heading)  # ∂x'/∂θ
-        Gx[2, 3] += odometry.trans * cos(heading)  # ∂y'/∂θ
+    # Compute the predicted sigma after incorporating the motion
+    Σxx = belief.covariance[1:3, 1:3]
+    Σxm = belief.covariance[1:3, 4:end]
 
-        # Motion noise
-        Rx = Diagonal{Float32}([0.1, 0.1, 0.01])
+    Σ = Matrix(belief.covariance)
+	Σ[1:3, 1:3] = Gx * Σxx * Gx' + Rx
+    Σ[1:3, 4:end] = Gx * Σxm
+	belief.covariance = Symmetric(Σ)
 
-        # Compute the predicted sigma after incorporating the motion
-        Σxx = belief.covariance[1:3, 1:3]
-        Σxm = belief.covariance[1:3, 4:end]
+end
 
-        Σ = Matrix(belief.covariance)
-        Σ[1:3, 1:3] = Gx * Σxx * Gx' + Rx
-        Σ[1:3, 4:end] = Gx * Σxm
-        belief.covariance = Symmetric(Σ)
 
-    def correction_step(self, belief, range_bearings):
-        rx, ry, rθ = belief.mean[1:3]
+function correction_step(belief, range_bearings)
+	rx, ry, rθ = belief.mean[1:3]
 
-        num_range_bearings = length(range_bearings)
-        num_dim_state = length(belief.mean)
+	num_range_bearings = length(range_bearings)
+	num_dim_state = length(belief.mean)
 
-        H = Matrix{Float32}(undef, 2 * num_range_bearings, num_dim_state) # Jacobian matrix ∂ẑ/∂(rx,ry)
-        zs, ẑs = [], []  # true and predicted observations
+	H = Matrix{Float32}(undef, 2 * num_range_bearings, num_dim_state) # Jacobian matrix ∂ẑ/∂(rx,ry)
+	zs, ẑs = [], []  # true and predicted observations
 
-        for (i, range_bearing) in enumerate(range_bearings)
-            mid = range_bearing.landmark_id
-            if ismissing(belief.mean[2*mid+2])
-                # Initialize its pose in mu based on the measurement and the current robot pose
-                mx, my = range_bearing_model([rx, ry, rθ], range_bearing)
-                belief.mean[2*mid+2:2*mid+3] = [mx, my]
-            end
-            # Add the landmark measurement to the Z vector
-            zs = [zs; range_bearing.range; range_bearing.bearing]
+    for (i, range_bearing) in enumerate(range_bearings)
+		mid = range_bearing.landmark_id
+        if ismissing(belief.mean[2*mid+2])
+			# Initialize its pose in mu based on the measurement and the current robot pose
+			mx, my = range_bearing_model([rx, ry, rθ], range_bearing)
+			belief.mean[2*mid+2:2*mid+3] = [mx, my]
+        end
+		# Add the landmark measurement to the Z vector
+		zs = [zs; range_bearing.range; range_bearing.bearing]
 
-            # Use the current estimate of the landmark pose
-            # to compute the corresponding expected measurement in z̄:
-            mx, my = belief.mean[2*mid+2:2*mid+3]
-            δ = [mx - rx, my - ry]
-            q = dot(δ, δ)
-            sqrtq = sqrt(q)
+		# Use the current estimate of the landmark pose
+		# to compute the corresponding expected measurement in z̄:
+		mx, my = belief.mean[2*mid+2:2*mid+3]
+		δ = [mx - rx, my - ry]
+		q = dot(δ, δ)
+		sqrtq = sqrt(q)
 
-            ẑs = [ẑs; sqrtq; atan(δ[2], δ[1]) - rθ]
+	 	ẑs = [ẑs; sqrtq; atan(δ[2], δ[1]) - rθ]
 
-            # Compute the Jacobian Hi of the measurement function h for this observation
-            δx, δy = δ
-            Hi = zeros(Float32, 2, num_dim_state)
-            Hi[1:2, 1:3] = [
-                -sqrtq * δx  -sqrtq * δy   0;
-                δy           -δx           -q
-            ] / q
-            Hi[1:2, 2*mid+2:2*mid+3] = [
-                sqrtq * δx sqrtq * δy;
-                -δy δx
-            ] / q
+		# Compute the Jacobian Hi of the measurement function h for this observation
+		δx, δy = δ
+		Hi = zeros(Float32, 2, num_dim_state)
+		Hi[1:2, 1:3] = [
+			-sqrtq * δx  -sqrtq * δy   0;
+			δy           -δx           -q
+		] / q
+		Hi[1:2, 2*mid+2:2*mid+3] = [
+			sqrtq * δx sqrtq * δy;
+			-δy δx
+		] / q
 
-            # Augment H with the new Hi
-            H[2*i-1:2*i, 1:end] = Hi
+		# Augment H with the new Hi
+		H[2*i-1:2*i, 1:end] = Hi
+    end
 
-        # Construct the sensor noise matrix Q
-        Q = Diagonal{Float32}(ones(2 * num_range_bearings) * 0.01)
+	# Construct the sensor noise matrix Q
+	Q = Diagonal{Float32}(ones(2 * num_range_bearings) * 0.01)
 
-        # Compute the Kalman gain K
-        K = belief.covariance * H' * inv(H * belief.covariance * H' + Q)
+	# Compute the Kalman gain K
+	K = belief.covariance * H' * inv(H * belief.covariance * H' + Q)
 
-        # Compute the difference between the expected and recorded measurements.
-        Δz = zs - ẑs
-        # Normalize the bearings
-        Δz[2:2:end] = map(bearing->rem2pi(bearing, RoundNearest), Δz[2:2:end])
+	# Compute the difference between the expected and recorded measurements.
+	Δz = zs - ẑs
+	# Normalize the bearings
+	Δz[2:2:end] = map(bearing->rem2pi(bearing, RoundNearest), Δz[2:2:end])
 
-        # Finish the correction step by computing the new mu and sigma.
-        belief.mean += K * Δz
-        I = Diagonal{Float32}(ones(num_dim_state))
-        belief.covariance = Symmetric((I - K * H) * belief.covariance)
+	# Finish the correction step by computing the new mu and sigma.
+	belief.mean += K * Δz
+	I = Diagonal{Float32}(ones(num_dim_state))
+	belief.covariance = Symmetric((I - K * H) * belief.covariance)
 
-        # Normalize theta in the robot pose.
-        belief.mean[3] = rem2pi(belief.mean[3], RoundNearest)
+	# Normalize theta in the robot pose.
+	belief.mean[3] = rem2pi(belief.mean[3], RoundNearest)
+end
 
-    def update_map(self, odometry, range_bearings):
-        # believes = []
-        belief = self.belief_init(self.num_landmarks)
-        self.prediction_step(belief, odometry)
-        self.correction_step(belief, range_bearings)
-        # push!(believes, deepcopy(belief))
+    def update_map(self, movement, measurement):
+        self.mu_new, self.cov = predict(self.mu_new, self.cov, movement, self.Rt)
+        self.mu = np.append(self.mu, self.mu_new, axis=1)
+        plotEstimate(self.mu, self.cov, self.r1, self.mapsize)
 
-        # canvas = make_canvas(-1, -1, 11, 11)
-        # HTML(animate_kalman_state(canvas, believes, range_bearingss, landmarks).to_jshtml())
+        # print('Measurements: {0:d}'.format(len(measurement)))
+        # mu_new, cov, c_prob_new = update(mu_new, cov, measurement, c_prob[:,-1].reshape(n+k,1), Qt)
+        # mu = np.append(mu,mu_new,axis=1)
+        # c_prob = np.append(c_prob, c_prob_new, axis=1)
+        # plotEstimate(mu, cov, self.r1, self.mapsize)
+        # plotMeasurement(mu_new, cov, measurement, n)
+
+        # plotError(mu,x_true[:len(mu[:,0::2])][:])
+        print('----------')
 
 
 def main():
@@ -369,12 +459,12 @@ def main():
     while not rospy.is_shutdown() or controller.finish:
         controller.follow_wall()
         mapping.update_map(
-            odometry=[
+            movement=[
                 controller.current_x,
                 controller.current_y,
                 controller.current_yaw
             ],
-            range_bearings=[]
+            measurement=[]
         )
         rate.sleep()
 
