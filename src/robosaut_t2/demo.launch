@@ -5,7 +5,7 @@
         name="robot_controller"
         pkg="robosaut_t2"
         type="robot_controller.py"
-        launch-prefix=""
+        launch-prefix="python3"
         required="true"
         output="screen"
     >

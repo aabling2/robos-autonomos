@@ -3,7 +3,6 @@
 import rospy
 import numpy as np
 from robot_slam import EKFmapping
-from robot_map import Mapping
 
 
 # Odometria contendo posição, orientação, vel. linear e angular
@@ -219,8 +218,8 @@ def main():
     # Cria node do controlador do robô
     rospy.init_node('robosaut_controller', anonymous=True)
     controller = Controller()
-    mapping = EKFmapping()
-    mapping2 = Mapping(fov=270, mapsize=10, plot=True, thresh_dist=0.7)
+    # mapping = EKFmapping()
+    mapping
 
     rate = rospy.Rate(10)  # 10hz
 
@@ -237,7 +236,7 @@ def main():
         # Robot controller
         controller.follow_wall()
 
-        """# Mapping SLAM
+        # Mapping SLAM
         if count >= 2:
             mapping.update(
                 odometry=np.array([
@@ -255,22 +254,7 @@ def main():
                 fov=controller.fov
             )
             count = 0
-        count += 1"""
-
-        mapping2.update(
-            pose=np.array([
-                controller.current_x,
-                controller.current_y,
-                controller.current_yaw
-            ]),
-            range_bearings=np.array([
-                [controller.left_dist, np.pi*1.25],  # 225
-                # [controller.leftfront_dist, np.pi],  # 180
-                [controller.front_dist, np.pi*0.75],  # 135
-                # [controller.rightfront_dist, np.pi*0.5],  # 90
-                [controller.right_dist, np.pi*0.25]  # 45
-            ])
-        )
+        count += 1
 
         rate.sleep()
 
