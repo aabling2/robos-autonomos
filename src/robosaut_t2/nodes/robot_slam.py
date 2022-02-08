@@ -7,17 +7,50 @@ from matplotlib.patches import Ellipse
 
 class EKFmapping():
     def __init__(self):
+        self.belief = False
         self.bel_mean = None
         self.bel_cov = None
+        self.hist_mu = []
 
         self.Rt = np.array([
-            [0.1, 0, 0],
-            [0, 0.1, 0],
-            [0, 0, 0.01]])
+            [1., 0, 0],
+            [0, 1., 0],
+            [0, 0, 1.]]) * .01
 
         self.Qt = np.array([
-            [0.01, 0],
-            [0, 0.01]])
+            [1., 0],
+            [0, 1.]]) * .01
+
+    def belief_init(self, num_landmarks):
+        self.bel_mean = np.zeros(3+2*num_landmarks)
+        self.bel_cov = 1e6*np.eye(3+2*num_landmarks)
+        self.bel_cov[:3, :3] = .0
+
+    # Random motion noise
+    def add_noise(self, odometry):
+        motion_noise = np.matmul(np.random.randn(1, 3), self.Rt)[0]
+        return odometry + motion_noise
+
+    def convert_odometry(self, pose, odometry):
+        drot1 = pose[2]
+        drot2 = odometry[2]
+        dtrans = np.linalg.norm(odometry[:2] - pose[:2])
+        return drot1, dtrans, drot2
+
+    def odometry_model(self, pose, odometry):
+        rx, ry, ra = pose
+        drot1, dtrans, drot2 = odometry
+
+        rx += dtrans*np.cos(ra+drot1)
+        ry += dtrans*np.sin(ra+drot1)
+        ra += (drot1 + drot2 + np.pi) % (2*np.pi) - np.pi
+
+        motion = np.array([
+            dtrans*np.cos(ra+drot1),
+            dtrans*np.sin(ra+drot1),
+            drot1 + drot2])
+
+        return motion
 
     def observation_model(self, pose, range_bearing):
         rx, ry, ra = pose
@@ -26,31 +59,28 @@ class EKFmapping():
         my = ry + range * np.sin(bearing + ra)
         return [mx, my]
 
-    def belief_init(self, num_landmarks):
-        self.bel_mean = np.zeros(3+2*num_landmarks)
-        self.bel_cov = 1e6*np.eye(3+2*num_landmarks)
-        self.bel_cov[:3, :3] = .0
-
     def prediction_step(self, odometry):
         n = len(self.bel_mean)
         F = np.append(np.eye(3), np.zeros((3, n-3)), axis=1)
         Rt = self.Rt
         bel_mean = self.bel_mean
         bel_cov = self.bel_cov
-        motion = odometry
+
+        odometry = self.convert_odometry(self.bel_mean[:3], odometry)
+        odometry = self.add_noise(odometry)
+        drot1, dtrans, drot2 = odometry
+        motion = self.odometry_model(self.bel_mean[:3], odometry)
 
         # Compute the new mu based on the noise-free
-        # (odometry-based) motion model
         self.bel_mean = bel_mean + (F.T).dot(motion)
 
         # Define motion model Jacobian
-        """
-            [0, 0, -dtrans*np.sin(mu[2][0]+drot1)],
-            [0, 0,  dtrans*np.cos(mu[2][0]+drot1)],
-            [0, 0,  0]
-        """
-        J = np.zeros((3, 3))
-        J[:, 2] = motion
+        J = np.array([
+            [0, 0, -dtrans*np.sin(bel_mean[2]+drot1)],
+            [0, 0,  dtrans*np.cos(bel_mean[2]+drot1)],
+            [0, 0,  0]])
+        # J = np.zeros((3, 3))
+        # J[:, 2] = motion
         Gt = np.eye(n) + (F.T).dot(J).dot(F)
 
         # Predict new covariance
@@ -64,7 +94,7 @@ class EKFmapping():
     def correction_step(self, range_bearings):
         bel_mean = self.bel_mean
         bel_cov = self.bel_cov
-        rx, ry, ra = bel_mean[0:3]
+        rx, ry, ra = bel_mean[:3]
         n_range_bearings = len(range_bearings)
         n_dim_state = len(bel_mean)
         # Qt = np.eye(2*n_range_bearings) * 0.01
@@ -133,35 +163,68 @@ class EKFmapping():
             'Updated location\t x: {0:.2} \t y: {1:.2} \t theta: {2:.2}'
             .format(mu[0], mu[1], mu[2]))
 
-    def update(self, odometry, range_bearings):
-        self.belief_init(num_landmarks=len(range_bearings))
+    def plot_map(self, mu, x, mapsize, fov):
+        a = plt.subplot(132, aspect='equal')
+        a.cla()
+        mu = np.array(mu).reshape((-1, len(mu)))
+        print("test", mu)
+
+        def stateToArrow(state):
+            x = state[0]
+            y = state[1]
+            dx = 0.5*np.cos(state[2])
+            dy = 0.5*np.sin(state[2])
+            return x, y, dx, dy
+
+        # plot current robot state covariance
+        plt.scatter(mu[0, -1], mu[1, -1], marker='o', s=10, color=(1, 0, 0))
+        plt.scatter(x[0], x[1], marker='o', s=10, color=(0, 0, 1))
+
+        # plot current robot field of view
+        # plot current robot field of view
+        plt.plot(
+            [x[0], x[0]+50*np.cos(x[2] + fov/2)],
+            [x[1], x[1]+50*np.sin(x[2] + fov/2)],
+            color="b")
+        plt.plot(
+            [x[0], x[0]+50*np.cos(x[2] - fov/2)],
+            [x[1], x[1]+50*np.sin(x[2] - fov/2)],
+            color="b")
+        plt.plot(
+            [mu[0, -1], mu[0, -1]+50*np.cos(mu[2, -1] + fov/2)],
+            [mu[1, -1], mu[1, -1]+50*np.sin(mu[2, -1] + fov/2)],
+            color="r")
+        plt.plot(
+            [mu[0, -1], mu[0, -1]+50*np.cos(mu[2, -1] - fov/2)],
+            [mu[1, -1], mu[1, -1]+50*np.sin(mu[2, -1] - fov/2)],
+            color="r")
+
+        # plot robot state history
+        for i in range(mu.shape[1]-1):
+            a.arrow(*stateToArrow(mu[:3, i]), head_width=0.2, color=(0, 1, 0))
+
+        # plot all landmarks ever observed
+        n = int((len(mu)-3)/2)
+        for i in range(n):
+            # if cov[2*i+3, 2*i+3] < 1e6:
+            zx = mu[2*i+3, -1]
+            zy = mu[2*i+4, -1]
+            plt.scatter(zx, zy, marker='s', s=12, color=(0, 0, 0))
+
+        # plot settings
+        plt.xlim([-mapsize/2, mapsize/2])
+        plt.ylim([-mapsize/2, mapsize/2])
+        plt.title('Observations and trajectory estimate')
+        plt.pause(0.1)
+
+    def update(self, odometry, range_bearings, fov=np.pi):
+        if not self.belief:
+            self.belief_init(num_landmarks=len(range_bearings))
+            self.belief = True
+
         self.prediction_step(odometry)
         self.correction_step(range_bearings)
 
-        self.plot_measurement(
-            self.bel_mean,
-            self.bel_cov,
-            range_bearings)
+        self.hist_mu.append(self.bel_mean)
 
-    def plot_measurement(self, mu, cov, obs):
-        a = plt.subplot(132, aspect='equal')
-        n = len(obs)
-        for j, z in enumerate(obs):
-            zx = mu[2*j+3]
-            zy = mu[2*j+4]
-            if j < n:
-                plt.plot([mu[0], zx], [mu[1], zy], color=(0, 1, 1))
-            else:
-                plt.plot([mu[0], zx], [mu[1], zy], color=(0, 1, 0))
-
-            landmark_cov = Ellipse(
-                xy=[zx, zy],
-                width=cov[2*j+3][2*j+3],
-                height=cov[2*j+4][2*j+4],
-                angle=0)
-
-            landmark_cov.set_edgecolor((0, 0, 0))
-            landmark_cov.set_fill(0)
-            a.add_artist(landmark_cov)
-
-        plt.pause(0.1)
+        self.plot_map(mu=self.hist_mu, x=odometry, mapsize=40, fov=fov)

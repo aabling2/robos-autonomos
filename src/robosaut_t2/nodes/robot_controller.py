@@ -44,6 +44,7 @@ class Controller():
             queue_size=10)
 
         # Posições de amostragem para LaserScan e distâncias iniciais
+        self.fov = 1.5*np.pi
         self.left_dist = 99999.
         self.leftfront_dist = 99999.
         self.front_dist = 99999.
@@ -57,12 +58,15 @@ class Controller():
         self.current_x = 0.0
         self.current_y = 0.0
         self.current_yaw = 0.0
+        self.drot1 = 0.0
+        self.dtrans = 0.0
+        self.drot2 = 0.0
 
         # Velocidades
-        self.speed_linear_fast = 0.05  # m/s
-        self.speed_linear_slow = 0.01  # m/s
-        self.speed_angular_fast = 1.0  # rad/s
-        self.speed_angular_slow = 0.1  # rad/s
+        self.speed_linear_fast = 0.20  # m/s
+        self.speed_linear_slow = 0.1  # m/s
+        self.speed_angular_fast = 2.0  # rad/s
+        self.speed_angular_slow = 0.3  # rad/s
 
         # Estado do seguidor de parede
         self.robot_state = "turn left"
@@ -75,7 +79,7 @@ class Controller():
         self.track_wall = False
         self.finish = False
 
-        self.odometry = []
+        self.odometry = np.zeros(3, dtype=np.float32)
         self.range_sense = []
 
     # Converte quaternions para ângulos de Euler
@@ -106,21 +110,9 @@ class Controller():
           msg.pose.pose.orientation.z,
           msg.pose.pose.orientation.w)
 
-        obs_state_vector_x_y_yaw = [
-            msg.pose.pose.position.x, msg.pose.pose.position.y, yaw]
-
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
         self.current_yaw = yaw
-
-        self.odometry = [
-            msg.pose.pose.position.x,
-            msg.pose.pose.position.y,
-            msg.pose.pose.position.z,
-            roll,
-            pitch,
-            yaw
-        ]
 
     # Callback das velocidades lineares e angulares
     # em '/jackal_velocity_controller/cmd_vel'
@@ -176,23 +168,7 @@ class Controller():
                     msg.angular.z = 0
             else:
                 self.search_wall = False
-                self.start_x = self.current_x
-                self.start_y = self.current_y
-                self.start_yaw = self.current_yaw
 
-        elif (
-                abs(self.current_x - self.start_x) > 15 and
-                abs(self.current_y - self.start_y) > 15 and
-                abs(self.current_yaw - self.start_yaw) > 15):
-            self.track_wall = True
-
-        elif self.track_wall and (
-                abs(self.current_x - self.start_x) < 10 and
-                abs(self.current_y - self.start_y) < 10 and
-                abs(self.current_yaw - self.start_yaw) < 10):
-            msg.linear.x = 0
-            msg.angular.z = 0
-            self.robot_state = "finish"
         else:
             if self.leftfront_dist < d1 or self.front_dist < d1 or\
                     self.rightfront_dist < d1:
@@ -219,6 +195,10 @@ class Controller():
             else:
                 self.robot_state += " turning slow to wall"
                 msg.angular.z = -self.speed_angular_slow
+
+        self.start_x = self.current_x
+        self.start_y = self.current_y
+        self.start_yaw = self.current_yaw
 
         # Envia mensagem da velocidade atualizada
         self.velocity_publisher.publish(msg)
@@ -256,19 +236,21 @@ def main():
         controller.follow_wall()
 
         # Mapping SLAM
-        if count >= 10:
+        if count >= 2:
             mapping.update(
                 odometry=np.array([
                     controller.current_x,
                     controller.current_y,
-                    controller.current_yaw]),
+                    controller.current_yaw
+                ]),
                 range_bearings=np.array([
                     # [controller.left_dist, np.pi*1.25],  # 225
                     # [controller.leftfront_dist, np.pi],  # 180
                     [controller.front_dist, np.pi*0.75],  # 135
                     # [controller.rightfront_dist, np.pi*0.5],  # 90
                     # [controller.right_dist, np.pi*0.25]  # 45
-                ])
+                ]),
+                fov=controller.fov
             )
             count = 0
         count += 1
