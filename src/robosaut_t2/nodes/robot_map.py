@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from dis import dis
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import distance
@@ -13,6 +12,8 @@ class Mapping():
         self.mapsize = mapsize
         self.plot = plot
         self.thresh_dist = thresh_dist
+        self.checkpoints = np.zeros((1, 3), dtype=np.float32)
+        self.check_steps = 20
 
         self.poses = np.zeros((1, 3), dtype=np.float32)
         self.range_bearings = None
@@ -94,9 +95,18 @@ class Mapping():
         # plot settings
         plt.xlim([-mapsize/2, mapsize/2])
         plt.ylim([-mapsize/2, mapsize/2])
-        plt.title('Mapeamento da área')
+        plt.title('Mapeamento da area')
         plt.pause(0.1)
         # plt.show()
+
+    def detect_end_trajectory(self):
+        if self.check_steps == 0:
+            self.checkpoints = np.append(self.checkpoints, self.poses[-1, :])
+            self.check_steps = 20
+        else:
+            self.check_steps -= 1
+
+        #-------
 
     def calc_area(self):
         print("Filtrando pontos")
