@@ -1,5 +1,8 @@
 # usr/bin/bash!
 
+# Terminal
+sudo apt-get install xterm
+
 # Robot simulation - Gazebo
 sudo apt-get install ros-melodic-gazebo-ros-pkgs ros-melodic-gazebo-ros-control
 
