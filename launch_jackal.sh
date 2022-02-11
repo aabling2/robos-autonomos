@@ -1,14 +1,11 @@
 # usr/bin/bash!
-
+WORLD=$1
 ROS_VERSION=melodic
 
-# rosdep update
-# rospack profile
 source /opt/ros/$ROS_VERSION/setup.bash
 source devel/setup.bash
 export JACKAL_LASER=1
 
-chmod +x $(rospack find robosaut_t2)/nodes/*.py
-roslaunch robosaut_t2 demo.launch &
-# rosrun map_server map_saver -f area_map &
+chmod +x $(rospack find slam_area)/nodes/*.py
+roslaunch slam_area demo.launch world:=$WORLD &
 wait

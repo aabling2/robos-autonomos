@@ -39,7 +39,7 @@ class Controller():
         # Velocidades
         self.speed_linear_fast = 0.20  # m/s
         self.speed_linear_slow = 0.1  # m/s
-        self.speed_angular_fast = 2.0  # rad/s
+        self.speed_angular_fast = 0.7  # rad/s
         self.speed_angular_slow = 0.3  # rad/s
 
         # Estado do seguidor de parede
@@ -51,6 +51,7 @@ class Controller():
 
         self.searching_wall = True
         self.finish = False
+        self.closed = False
 
         self.odom_subscriber = rospy.Subscriber(
             name='/jackal_velocity_controller/odom',
@@ -160,7 +161,7 @@ class Controller():
         else:
             if self.leftfront_dist < d1 or self.front_dist < d1 or\
                     self.rightfront_dist < d1:
-                self.robot_state = "stop"
+                self.robot_state = "caution"
                 msg.linear.x = 0
             elif self.leftfront_dist < d2 or self.front_dist < d2 or\
                     self.rightfront_dist < d2:
@@ -184,6 +185,12 @@ class Controller():
                 self.robot_state += "turning slow +"
                 msg.angular.z = -self.speed_angular_slow
 
+        if self.finish:
+            self.robot_state = "stop"
+            msg.linear.x = 0
+            msg.angular.z = 0
+            self.closed = True
+
         self.start_x = self.current_x
         self.start_y = self.current_y
         self.start_yaw = self.current_yaw
@@ -203,31 +210,3 @@ class Controller():
             " s0=" + str(round(self.right_dist, 2)) + "] " +
             self.robot_state
         )
-
-
-def main():
-    # Cria node do controlador do robô
-    rospy.wait_for_service('gazebo/set_physics_properties')
-    rospy.init_node('robosaut_controller', anonymous=True)
-    rate = rospy.Rate(10)  # 10hz
-    controller = Controller()
-
-    # Espera tópico do laser abrir
-    data = None
-    while data is None:
-        try:
-            data = rospy.wait_for_message('/front/scan', LaserScan, timeout=2)
-        except Exception:
-            pass
-
-    while not rospy.is_shutdown() or controller.finish:
-        controller.follow_wall()
-        rate.sleep()
-
-    # Aguarda finalizar o processo
-    rospy.spin()
-    del controller
-
-
-if __name__ == "__main__":
-    main()

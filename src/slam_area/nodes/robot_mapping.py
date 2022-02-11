@@ -4,6 +4,7 @@ import rospy
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import distance
+from scipy.spatial import ConvexHull, convex_hull_plot_2d
 from matplotlib.patches import Ellipse
 
 
@@ -15,10 +16,12 @@ from sensor_msgs.msg import LaserScan
 
 
 class Mapping():
-    def __init__(self, fov=180, mapsize=10, plot=False, thresh_dist=5):
+    def __init__(self, fov=180, mapsize=10, plot=False, thresh_dist=5,
+                 steps_checkpoint=20):
         self.fov = fov*(np.pi/180)
         self.mapsize = mapsize
         self.plot = plot
+        self.endpoint = False
 
         self.poses = None
         self.range_bearings = None
@@ -27,7 +30,7 @@ class Mapping():
         self.thresh_dist = thresh_dist
 
         self.checkpoints = None
-        self.check_steps = 20
+        self.check_steps = steps_checkpoint
         self.check_count = 0
 
         self.finish = False
@@ -89,17 +92,6 @@ class Mapping():
             ], dtype=np.float32
         )
 
-    def update(self):
-        if self.odometry is not None:
-            self._update_pose(pose=self.odometry)
-            self._update_landmarks(range_bearings=self.laser_scan)
-            end_point = self._detect_end_trajectory()
-            print("end_point", end_point)
-            #conseguir enviar para controlador parar
-
-        if self.plot:
-            self.plot_map()
-
     def _observation_model(self, pose, range_bearings):
         rx, ry, ra = pose
         ranges, bearings = range_bearings[:, 0], range_bearings[:, 1]
@@ -129,8 +121,8 @@ class Mapping():
         self.landmarks = landmarks
 
     def plot_map(self):
-        a = plt.subplot(132, aspect='equal')
-        a.cla()
+        plt.subplot(131, aspect='equal')
+        plt.clf()
 
         fov = self.fov
         mapsize = self.mapsize
@@ -139,13 +131,13 @@ class Mapping():
         def stateToArrow(state):
             x = state[0]
             y = state[1]
-            dx = 0.5*np.cos(state[2])
-            dy = 0.5*np.sin(state[2])
+            dx = 0.1 * np.cos(state[2])
+            dy = 0.1 * np.sin(state[2])
             return x, y, dx, dy
 
         if self.poses is not None:
             # plot current robot state covariance
-            a.arrow(*stateToArrow(x[-1, :]), head_width=0.5, color=(1, 0, 1))
+            plt.arrow(*stateToArrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
 
             # plot current robot field of view
             plt.plot(
@@ -166,19 +158,22 @@ class Mapping():
 
         # plot all landmarks ever observed
         if self.landmarks is not None:
+            max_mapsize = np.max(self.landmarks)*2
+            mapsize = max_mapsize*1.1 if max_mapsize > mapsize else mapsize
             for lm in self.landmarks:
                 plt.scatter(lm[0], lm[1], marker='s', s=12, color=(0, 0, 0))
 
         if self.checkpoints is not None:
             for c in self.checkpoints:
-                plt.scatter(c[0], c[1], marker='o', s=12, color=(1, 0, 0))
+                plt.scatter(c[0], c[1], marker='o', s=15, color=(1, 0, 0))
 
         # plot settings
         plt.xlim([-mapsize/2, mapsize/2])
         plt.ylim([-mapsize/2, mapsize/2])
-        plt.title('Mapeamento da area')
+        plt.title('Mapeando area...')
         plt.pause(0.001)
         # plt.show()
+        self.mapsize = mapsize
 
     def _detect_end_trajectory(self):
         if self.poses is not None:
@@ -196,45 +191,47 @@ class Mapping():
 
             if self.checkpoints is not None:
                 dists = distance.cdist(
-                    self.poses[-1, :].reshape(1, 3),
-                    self.checkpoints[:-1, :],
+                    self.poses[-1, :2].reshape(1, 2),
+                    self.checkpoints[:-1, :2],
                     metric='euclidean')
 
-                return True if np.any(dists < self.thresh_dist) else False
-
-        return False
+                if np.any(dists < self.thresh_dist):
+                    self.endpoint = True
 
     def calc_area(self):
-        print("Filtrando pontos")
-        print("Calculando area")
+        if self.landmarks is not None:
+            plt.subplot(132, aspect='equal')
 
+            print("\nFechando pontos...")
+            points = self.landmarks
+            hull = ConvexHull(points)
 
-def main():
-    # Cria node do controlador do robô
-    rospy.wait_for_service('gazebo/set_physics_properties')
-    rospy.init_node('robosaut_mapping', anonymous=True)
-    rate = rospy.Rate(10)  # 10hz
-    mapping = Mapping(fov=270, mapsize=10, plot=True, thresh_dist=0.7)
+            """print("Calculando área...")
+            connected_points = hull[hull.simplices, :]
+            lines = np.hstack([
+                connected_points,
+                np.roll(connected_points, -1, axis=0)])
+            area = 0.5*abs(sum(x1*y2-x2*y1 for x1, y1, x2, y2 in lines))
+            print("Área encontrada:", area)"""
 
-    # Espera tópico do laser abrir
-    data = None
-    while data is None:
-        try:
-            data = rospy.wait_for_message('/front/scan', LaserScan, timeout=2)
-        except Exception:
-            pass
+            plt.plot(points[:, 0], points[:, 1], 'o')
+            for simplex in hull.simplices:
+                plt.plot(points[simplex, 0], points[simplex, 1], 'k-')
 
-    while not rospy.is_shutdown() or mapping.finish:
-        mapping.update()
-        rate.sleep()
+            mapsize = self.mapsize
+            plt.xlim([-mapsize/2, mapsize/2])
+            plt.ylim([-mapsize/2, mapsize/2])
+            plt.title('Area gerada')
+            plt.show()
 
-    # Calcula area do mapa gerado
-    mapping.calc_area()
+        else:
+            print("Sem pontos mapeados para calcular!")
 
-    # Aguarda finalizar o processo
-    rospy.spin()
-    del mapping
+    def update(self):
+        if self.odometry is not None:
+            self._update_pose(pose=self.odometry)
+            self._update_landmarks(range_bearings=self.laser_scan)
+            self._detect_end_trajectory()
 
-
-if __name__ == "__main__":
-    main()
+        if self.plot:
+            self.plot_map()

@@ -1,0 +1,45 @@
+<launch>
+
+    <arg name="world" default="world1"/>
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
+        <arg name="world_name" value="$(find slam_area)/worlds/$(arg world)"/>
+        <arg name="paused" value="false"/>
+        <arg name="use_sim_time" value="false"/>
+        <arg name="gui" value="true"/>
+        <arg name="recording" value="false"/>
+        <arg name="debug" value="false"/>
+    </include>
+
+    <arg name="platform" value="jackal"/>
+    <arg name="config" value="front_laser"/>
+    <arg name="x" default="0"/>
+    <arg name="y" default="0"/>
+    <arg name="z" default="0"/>
+    <arg name="yaw" default="0"/>
+    <include file="$(find jackal_gazebo)/launch/spawn_jackal.launch">
+        <!-- Optionally configure the spawn position -->
+        <arg name="x" value="$(arg x)"/>
+        <arg name="y" value="$(arg y)"/>
+        <arg name="z" value="$(arg z)"/>
+        <arg name="yaw" value="$(arg yaw)"/>
+        <arg name="joystick" default="false"/>
+    </include>
+
+    <node
+        name="rqt_graph"
+        pkg="rqt_graph"
+        type="rqt_graph"
+        output="screen"
+        required="true"
+    />
+
+    <node 
+        name="robot_controller_mapping"
+        pkg="slam_area"
+        type="robot_launch.py"
+        launch-prefix=""
+        required="true"
+        output="screen"
+    ><remap from="scan" to="front/scan"/></node>
+
+</launch>
