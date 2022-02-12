@@ -127,6 +127,8 @@ class Mapping():
         fov = self.fov
         mapsize = self.mapsize
         x = self.poses
+        l_points = self.landmarks
+        c_points = self.checkpoints
 
         def stateToArrow(state):
             x = state[0]
@@ -157,15 +159,17 @@ class Mapping():
                     color="c")
 
         # plot all landmarks ever observed
-        if self.landmarks is not None:
+        if l_points is not None:
             max_mapsize = np.max(self.landmarks)*2
             mapsize = max_mapsize*1.1 if max_mapsize > mapsize else mapsize
-            for lm in self.landmarks:
-                plt.scatter(lm[0], lm[1], marker='s', s=12, color=(0, 0, 0))
+            plt.scatter(
+                l_points[:, 0], l_points[:, 1],
+                marker='D', s=12, color=(0, 0, 0))
 
-        if self.checkpoints is not None:
-            for c in self.checkpoints:
-                plt.scatter(c[0], c[1], marker='o', s=15, color=(1, 0, 0))
+        if c_points is not None:
+            plt.scatter(
+                c_points[:, 0], c_points[:, 1],
+                marker='s', s=20, color=(1, 0, 0))
 
         # plot settings
         plt.xlim([-mapsize/2, mapsize/2])
@@ -198,30 +202,64 @@ class Mapping():
                 if np.any(dists < self.thresh_dist):
                     self.endpoint = True
 
+    def _convex_hull(self, points):
+        hull_points = []
+
+        # Pega ponto mais a esquerda
+        start_point = points[np.argmin(points[:, 0], axis=0)]
+        point = start_point
+        hull_points.append(start_point)
+        far_point = None
+
+        while np.all(far_point != start_point):
+            p1 = None
+            for p in points:
+                if np.all(p == point):
+                    continue
+                else:
+                    p1 = p
+                    break
+
+            far_point = p1
+            for p2 in points:
+                if np.all(p2 == point) or np.all(p2 == p1):
+                    continue
+                else:
+                    diff = (
+                        ((p2[0] - point[0]) * (far_point[1] - point[1]))
+                        - ((far_point[0] - point[0]) * (p2[1] - point[1]))
+                    )
+                    if diff > 0:
+                        far_point = p2
+
+            hull_points.append(far_point)
+            point = far_point
+
+        return np.array(hull_points, dtype=np.float32)
+
+    def _shoelace_area(self, points):
+        lines = np.hstack([points, np.roll(points, -1, axis=0)])
+        area = 0.5*abs(sum(x1*y2-x2*y1 for x1, y1, x2, y2 in lines))
+        return round(area, 2)
+
     def calc_area(self):
         if self.landmarks is not None:
-            plt.subplot(132, aspect='equal')
+            # plt.figure()
 
             print("\nFechando pontos...")
             points = self.landmarks
-            hull = ConvexHull(points)
+            hull_points = self._convex_hull(points)
 
-            """print("Calculando área...")
-            connected_points = hull[hull.simplices, :]
-            lines = np.hstack([
-                connected_points,
-                np.roll(connected_points, -1, axis=0)])
-            area = 0.5*abs(sum(x1*y2-x2*y1 for x1, y1, x2, y2 in lines))
-            print("Área encontrada:", area)"""
+            print("Calculando area...")
+            area = self._shoelace_area(hull_points)
+            print("Area encontrada:", area)
 
-            plt.plot(points[:, 0], points[:, 1], 'o')
-            for simplex in hull.simplices:
-                plt.plot(points[simplex, 0], points[simplex, 1], 'k-')
+            plt.plot(hull_points[:, 0], hull_points[:, 1], color=(0, 0, 1))
 
             mapsize = self.mapsize
             plt.xlim([-mapsize/2, mapsize/2])
             plt.ylim([-mapsize/2, mapsize/2])
-            plt.title('Area gerada')
+            plt.title('Area encontrada: ' + str(area) + 'm2')
             plt.show()
 
         else:

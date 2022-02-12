@@ -16,7 +16,7 @@ def main():
     rate = rospy.Rate(10)  # 10hz
     controller = Controller()
     mapping = Mapping(
-        fov=270, mapsize=5, plot=True, thresh_dist=0.5, steps_checkpoint=50)
+        fov=270, mapsize=5, plot=True, thresh_dist=0.5, steps_checkpoint=35)
 
     # Espera tópico do laser abrir
     data = None
@@ -37,7 +37,6 @@ def main():
             rate.sleep()
 
         except Exception:
-            rospy.spin()
             break
 
     # Calcula area do mapa gerado
@@ -46,6 +45,8 @@ def main():
     # Aguarda finalizar o processo
     del controller
     del mapping
+
+    rospy.spin()
 
 
 if __name__ == "__main__":
