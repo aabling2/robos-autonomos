@@ -9,3 +9,5 @@ export JACKAL_LASER=1
 chmod +x $(rospack find slam_area)/nodes/*.py
 roslaunch slam_area demo.launch world:=$WORLD &
 wait
+
+# roslaunch jackal_viz view_robot.launch

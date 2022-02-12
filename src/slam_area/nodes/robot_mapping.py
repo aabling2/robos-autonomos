@@ -1,11 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+from nis import maps
 import rospy
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import distance
-from scipy.spatial import ConvexHull, convex_hull_plot_2d
-from matplotlib.patches import Ellipse
 
 
 # Odometria contendo posição, orientação, vel. linear e angular
@@ -15,10 +14,19 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 
 
+class SICK_LMS511:
+    range = 80  # metros
+    angle = 270  # graus
+    n_laser_bins = 720
+    rad_angle = angle*(np.pi/180)  # 270
+    rad_min_angle = -rad_angle/2  # 90 - 270/2
+    rad_max_angle = rad_angle/2
+
+
 class Mapping():
-    def __init__(self, fov=180, mapsize=10, plot=False, thresh_dist=5,
-                 steps_checkpoint=20):
-        self.fov = fov*(np.pi/180)
+    def __init__(self, mapsize=10, plot=False, thresh_dist=5,
+                 steps_checkpoint=20, laser_samples=10):
+
         self.mapsize = mapsize
         self.plot = plot
         self.endpoint = False
@@ -34,6 +42,15 @@ class Mapping():
         self.check_count = 0
 
         self.finish = False
+
+        # Sensor laser de alcance
+        self.laser = SICK_LMS511()
+        self.laser_bins = np.linspace(
+            0, self.laser.n_laser_bins-1,
+            laser_samples, dtype=np.int32)
+        self.laser_angles = np.linspace(
+            self.laser.rad_min_angle, self.laser.rad_max_angle,
+            laser_samples, dtype=np.float32)
 
         self.odometry = None
         self.laser_scan = None
@@ -74,29 +91,22 @@ class Mapping():
     # Callback do LaserScan
     # em '/front/laser'
     def scan_callback(self, msg):
-        # n_laser_beams = len(msg.ranges) = 720
-        # max_angle = 270
-        # r = n_laser_beams/max_angle = 2.6666 -> 2.6666*angle
-        self.left_dist = msg.ranges[600]  # 225
-        self.leftfront_dist = msg.ranges[480]  # 180
-        self.front_dist = msg.ranges[360]  # 135
-        self.rightfront_dist = msg.ranges[240]  # 90
-        self.right_dist = msg.ranges[120]  # 45
+        ranges = np.array(msg.ranges)
+        ranges[:] = 5.0
 
-        self.laser_scan = np.array([
-            [self.left_dist, np.pi*1.25],  # 225
-            [self.leftfront_dist, np.pi],  # 180
-            [self.front_dist, np.pi*0.75],  # 135
-            [self.rightfront_dist, np.pi*0.5],  # 90
-            [self.right_dist, np.pi*0.25]  # 45
-            ], dtype=np.float32
-        )
+        self.laser_scan = np.hstack([
+            ranges[self.laser_bins],
+            self.laser_angles,
+        ]).reshape(-1, 2)
 
     def _observation_model(self, pose, range_bearings):
         rx, ry, ra = pose
         ranges, bearings = range_bearings[:, 0], range_bearings[:, 1]
-        mx = rx + ranges * np.cos(bearings + ra)
-        my = ry + ranges * np.sin(bearings + ra)
+        #---
+        rx, ry, ra = 0, 0, 0
+
+        mx = rx + ranges * np.cos(bearings + ra + np.pi/2)
+        my = ry + ranges * np.sin(bearings + ra + np.pi/2)
         return np.hstack([mx, my]).reshape((-1, 2))
 
     def _update_pose(self, pose):
@@ -108,72 +118,89 @@ class Mapping():
     def _update_landmarks(self, range_bearings):
         pose = self.poses[-1, :]
         landmarks = self.landmarks
+        # print("enter")
         observations = self._observation_model(pose, range_bearings)
-        if landmarks is None:
+        # print("obs", observations)
+        landmarks = observations
+        """if landmarks is None:
+            print("land None")
             landmarks = observations
+            print(landmarks)
         else:
+            # print("land not None")
             dists = distance.cdist(observations, landmarks, metric='euclidean')
             new_ids = np.all(dists > self.thresh_dist, axis=1)
             if True in new_ids:
                 landmarks = np.append(
                     landmarks, observations[new_ids, :], axis=0)
+                # print("new lands", landmarks)"""
 
         self.landmarks = landmarks
 
-    def plot_map(self):
+    def _plot_map(self):
         plt.subplot(131, aspect='equal')
         plt.clf()
 
-        fov = self.fov
+        fov = self.laser.rad_angle
         mapsize = self.mapsize
         x = self.poses
         l_points = self.landmarks
         c_points = self.checkpoints
 
-        def stateToArrow(state):
-            x = state[0]
-            y = state[1]
-            dx = 0.1 * np.cos(state[2])
-            dy = 0.1 * np.sin(state[2])
+        # Inverte eixos para melhor comparação com Gazebo
+        x_id, y_id = 1, 0
+
+        def state_arrow(state, size=0.1):
+            x = state[x_id]
+            y = state[y_id]
+            dx = size * np.cos(state[2])
+            dy = size * np.sin(state[2])
+            dx, dy = dy, dx  # inverte para exibir
             return x, y, dx, dy
 
         if self.poses is not None:
+            max_mapsize = np.max(self.poses[:, :2])*2
+            mapsize = max_mapsize*1.2 if max_mapsize > mapsize else mapsize
+
             # plot current robot state covariance
-            plt.arrow(*stateToArrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
+            plt.arrow(*state_arrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
 
             # plot current robot field of view
+            mid_fov = fov/2
             plt.plot(
-                [x[-1, 0], x[-1, 0]+50*np.cos(x[-1, 2] + fov/2)],
-                [x[-1, 1], x[-1, 1]+50*np.sin(x[-1, 2] + fov/2)],
+                [x[-1, x_id], x[-1, x_id]+50*np.sin(x[-1, 2] + mid_fov)],
+                [x[-1, y_id], x[-1, y_id]+50*np.cos(x[-1, 2] + mid_fov)],
                 color="r")
             plt.plot(
-                [x[-1, 0], x[-1, 0]+50*np.cos(x[-1, 2] - fov/2)],
-                [x[-1, 1], x[-1, 1]+50*np.sin(x[-1, 2] - fov/2)],
+                [x[-1, x_id], x[-1, x_id]+50*np.sin(x[-1, 2] - mid_fov)],
+                [x[-1, y_id], x[-1, y_id]+50*np.cos(x[-1, 2] - mid_fov)],
                 color="r")
 
             # plot robot state history
             for i in range(1, len(x)):
                 plt.plot(
-                    [x[i-1, 0], x[i, 0]],
-                    [x[i-1, 1], x[i, 1]],
+                    [x[i-1, x_id], x[i, x_id]],
+                    [x[i-1, y_id], x[i, y_id]],
                     color="c")
 
         # plot all landmarks ever observed
         if l_points is not None:
             max_mapsize = np.max(self.landmarks)*2
-            mapsize = max_mapsize*1.1 if max_mapsize > mapsize else mapsize
+            mapsize = max_mapsize*1.2 if max_mapsize > mapsize else mapsize
             plt.scatter(
-                l_points[:, 0], l_points[:, 1],
+                l_points[:, x_id], l_points[:, y_id],
                 marker='D', s=12, color=(0, 0, 0))
 
         if c_points is not None:
             plt.scatter(
-                c_points[:, 0], c_points[:, 1],
+                c_points[:, x_id], c_points[:, y_id],
                 marker='s', s=20, color=(1, 0, 0))
 
         # plot settings
-        plt.xlim([-mapsize/2, mapsize/2])
+        plt.xlim([mapsize/2, -mapsize/2])
         plt.ylim([-mapsize/2, mapsize/2])
+        plt.xlabel("Y-gazebo")
+        plt.ylabel("X-gazebo")
         plt.title('Mapeando area...')
         plt.pause(0.001)
         # plt.show()
@@ -244,20 +271,18 @@ class Mapping():
 
     def calc_area(self):
         if self.landmarks is not None:
-            # plt.figure()
-
-            print("\nFechando pontos...")
+            print("Fechando pontos...")
             points = self.landmarks
             hull_points = self._convex_hull(points)
 
             print("Calculando area...")
             area = self._shoelace_area(hull_points)
-            print("Area encontrada:", area)
+            print("Area encontrada: " + str(area) + "m2")
 
-            plt.plot(hull_points[:, 0], hull_points[:, 1], color=(0, 0, 1))
+            plt.plot(hull_points[:, 1], hull_points[:, 0], color=(0, 0, 1))
 
             mapsize = self.mapsize
-            plt.xlim([-mapsize/2, mapsize/2])
+            plt.xlim([mapsize/2, -mapsize/2])
             plt.ylim([-mapsize/2, mapsize/2])
             plt.title('Area encontrada: ' + str(area) + 'm2')
             plt.show()
@@ -266,10 +291,31 @@ class Mapping():
             print("Sem pontos mapeados para calcular!")
 
     def update(self):
+        # print("\nodometry", self.odometry)
         if self.odometry is not None:
+            # print("enter")
             self._update_pose(pose=self.odometry)
+            # print("landmarks", self.laser_scan)
             self._update_landmarks(range_bearings=self.laser_scan)
-            self._detect_end_trajectory()
+            # self._detect_end_trajectory()
 
-        if self.plot:
-            self.plot_map()
+            plt.subplot(131, aspect='equal')
+            plt.clf()
+            l_points = self.landmarks
+            mapsize = self.mapsize
+            if l_points is not None:
+                max_mapsize = np.max(self.landmarks)*2
+                mapsize = max_mapsize*1.2 if max_mapsize > mapsize else mapsize
+                plt.scatter(
+                    l_points[:, 0], l_points[:, 1],
+                    marker='D', s=12, color=(0, 0, 0))
+
+            plt.xlim([mapsize/2, -mapsize/2])
+            plt.ylim([mapsize/2, -mapsize/2])
+            plt.xlabel("X-gazebo")
+            plt.ylabel("Y-gazebo")
+            plt.title('Mapeando area...')
+            plt.pause(0.001)
+
+        """if self.plot:
+            self._plot_map()"""

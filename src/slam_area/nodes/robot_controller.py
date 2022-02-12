@@ -26,15 +26,9 @@ class Controller():
         self.right_dist = 99999.
 
         # Posição do robô
-        self.start_x = 0.0
-        self.start_y = 0.0
-        self.start_yaw = 0.0
         self.current_x = 0.0
         self.current_y = 0.0
         self.current_yaw = 0.0
-        self.drot1 = 0.0
-        self.dtrans = 0.0
-        self.drot2 = 0.0
 
         # Velocidades
         self.speed_linear_fast = 0.20  # m/s
@@ -46,8 +40,8 @@ class Controller():
         self.robot_state = "turn left"
 
         # Distância a ser mantida da parede
-        self.dist_wall_close = 0.7  # metros
-        self.dist_wall_thresh = 1.  # metros
+        self.dist_wall_close = 0.5  # metros
+        self.dist_wall_thresh = 0.7  # metros
 
         self.searching_wall = True
         self.finish = False
@@ -191,22 +185,23 @@ class Controller():
             msg.angular.z = 0
             self.closed = True
 
-        self.start_x = self.current_x
-        self.start_y = self.current_y
-        self.start_yaw = self.current_yaw
+        """msg.linear.x = 1
+        msg.angular.z = 0.5"""
 
         # Envia mensagem da velocidade atualizada
         self.velocity_publisher.publish(msg)
 
         # Mostra distâncias detectadas pelo LaserScan
-        rospy.loginfo(
-            "[x=" + str(round(self.current_x, 2)) +
+        """print(
+            "\npose:" +
+            " [x=" + str(round(self.current_x, 2)) +
             "; y=" + str(round(self.current_y, 2)) +
-            "; yaw=" + str(round(self.current_yaw, 2)) + "]"
+            "; yaw=" + str(round(self.current_yaw, 2)) + "]" +
+            "\nrange finder:" +
             " [s180=" + str(round(self.left_dist, 2)) +
             " s135=" + str(round(self.leftfront_dist, 2)) +
             " s90=" + str(round(self.front_dist, 2)) +
             " s45=" + str(round(self.rightfront_dist, 2)) +
             " s0=" + str(round(self.right_dist, 2)) + "] " +
-            self.robot_state
-        )
+            "\nrobot state: " + self.robot_state + "\n"
+        )"""
