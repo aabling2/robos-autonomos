@@ -17,7 +17,7 @@ def main():
     controller = Controller()
     mapping = Mapping(
         mapsize=5, plot=True, thresh_dist=0.5,
-        steps_checkpoint=40, laser_samples=200)
+        steps_checkpoint=40, laser_samples=20)
 
     # Espera tópico do laser abrir
     data = None
@@ -27,7 +27,6 @@ def main():
         except Exception:
             pass
 
-    count = 0
     while not rospy.is_shutdown() and not controller.closed:
         controller.follow_wall()
         mapping.update()
@@ -41,13 +40,8 @@ def main():
         except Exception:
             break
 
-        """if count == 2:
-            break
-        else:
-            count += 1"""
-
     # Calcula area do mapa gerado
-    # mapping.calc_area()
+    mapping.calc_area()
 
     # Aguarda finalizar o processo
     del controller

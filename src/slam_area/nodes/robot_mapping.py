@@ -50,7 +50,7 @@ class Mapping():
             laser_samples, dtype=np.int32)
         self.laser_angles = np.linspace(
             self.laser.rad_min_angle, self.laser.rad_max_angle,
-            laser_samples, dtype=np.float32)
+            laser_samples, dtype=np.float32).reshape(-1, 1)
 
         self.odometry = None
         self.laser_scan = None
@@ -92,22 +92,23 @@ class Mapping():
     # em '/front/laser'
     def scan_callback(self, msg):
         ranges = np.array(msg.ranges)
-        ranges[:] = 5.0
 
         self.laser_scan = np.hstack([
-            ranges[self.laser_bins],
+            ranges[self.laser_bins].reshape(-1, 1),
             self.laser_angles,
         ]).reshape(-1, 2)
 
     def _observation_model(self, pose, range_bearings):
         rx, ry, ra = pose
         ranges, bearings = range_bearings[:, 0], range_bearings[:, 1]
-        #---
-        rx, ry, ra = 0, 0, 0
 
-        mx = rx + ranges * np.cos(bearings + ra + np.pi/2)
-        my = ry + ranges * np.sin(bearings + ra + np.pi/2)
-        return np.hstack([mx, my]).reshape((-1, 2))
+        mx = rx + ranges * np.cos(bearings + ra)
+        my = ry + ranges * np.sin(bearings + ra)
+
+        mx = mx.reshape(-1, 1)
+        my = my.reshape(-1, 1)
+
+        return np.hstack([mx, my])
 
     def _update_pose(self, pose):
         if self.poses is None:
@@ -118,22 +119,15 @@ class Mapping():
     def _update_landmarks(self, range_bearings):
         pose = self.poses[-1, :]
         landmarks = self.landmarks
-        # print("enter")
         observations = self._observation_model(pose, range_bearings)
-        # print("obs", observations)
-        landmarks = observations
-        """if landmarks is None:
-            print("land None")
+        if landmarks is None:
             landmarks = observations
-            print(landmarks)
         else:
-            # print("land not None")
             dists = distance.cdist(observations, landmarks, metric='euclidean')
             new_ids = np.all(dists > self.thresh_dist, axis=1)
             if True in new_ids:
                 landmarks = np.append(
                     landmarks, observations[new_ids, :], axis=0)
-                # print("new lands", landmarks)"""
 
         self.landmarks = landmarks
 
@@ -291,31 +285,10 @@ class Mapping():
             print("Sem pontos mapeados para calcular!")
 
     def update(self):
-        # print("\nodometry", self.odometry)
         if self.odometry is not None:
-            # print("enter")
             self._update_pose(pose=self.odometry)
-            # print("landmarks", self.laser_scan)
             self._update_landmarks(range_bearings=self.laser_scan)
-            # self._detect_end_trajectory()
+            self._detect_end_trajectory()
 
-            plt.subplot(131, aspect='equal')
-            plt.clf()
-            l_points = self.landmarks
-            mapsize = self.mapsize
-            if l_points is not None:
-                max_mapsize = np.max(self.landmarks)*2
-                mapsize = max_mapsize*1.2 if max_mapsize > mapsize else mapsize
-                plt.scatter(
-                    l_points[:, 0], l_points[:, 1],
-                    marker='D', s=12, color=(0, 0, 0))
-
-            plt.xlim([mapsize/2, -mapsize/2])
-            plt.ylim([mapsize/2, -mapsize/2])
-            plt.xlabel("X-gazebo")
-            plt.ylabel("Y-gazebo")
-            plt.title('Mapeando area...')
-            plt.pause(0.001)
-
-        """if self.plot:
-            self._plot_map()"""
+        if self.plot:
+            self._plot_map()
