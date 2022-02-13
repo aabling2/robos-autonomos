@@ -1,5 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+from nis import maps
+
+from matplotlib.cbook import maxdict
 import rospy
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,11 +26,10 @@ class SICK_LMS511:
 
 
 class Mapping():
-    def __init__(self, plot=False, dist_thresh_min=1, dist_thresh_max=2,
-                 dist_trace_stop=1, dist_map_stop=2,
-                 steps_checkpoint=20, laser_samples=10):
+    def __init__(self, mapsize=10, plot=False, dist_thresh=1,
+                 dist_stop=1, steps_checkpoint=20, laser_samples=10):
 
-        self.mapsize = 5.0
+        self.mapsize = mapsize
         self.plot = plot
         self.endpoint = False
 
@@ -35,10 +37,8 @@ class Mapping():
         self.range_bearings = None
         self.landmarks = None
 
-        self.dist_thresh_min = dist_thresh_min
-        self.dist_thresh_max = dist_thresh_max
-        self.dist_trace_stop = dist_trace_stop
-        self.dist_map_stop = dist_map_stop
+        self.dist_thresh = dist_thresh
+        self.dist_stop = dist_stop
 
         self.checkpoints = None
         self.check_steps = steps_checkpoint
@@ -113,28 +113,6 @@ class Mapping():
 
         return np.hstack([mx, my])
 
-    def _sort_landmarks(self, landmarks):
-        N = landmarks.shape[0]
-        dists = distance.cdist(landmarks, landmarks, metric='euclidean')
-        np.fill_diagonal(dists, np.inf)
-        used_idx = []
-        sorted_landmarks = []
-        idx = 0
-        while len(used_idx) < N:
-            d = dists[idx]
-            for n in range(len(d)):
-                min_idx = np.argmin(d)
-                if min_idx not in used_idx:
-                    sorted_landmarks.append(landmarks[min_idx])
-                    used_idx.append(min_idx)
-                    idx = min_idx
-                    break
-                else:
-                    d[min_idx] = np.inf
-                    continue
-
-        return np.array(sorted_landmarks, dtype=np.float32)
-
     def _update_pose(self, pose):
         if self.poses is None:
             self.poses = np.array([pose])
@@ -149,14 +127,10 @@ class Mapping():
             landmarks = observations
         else:
             dists = distance.cdist(observations, landmarks, metric='euclidean')
-            new_ids_min = np.all(dists > self.dist_thresh_min, axis=1)
-            new_ids_max = np.any(dists < self.dist_thresh_max, axis=1)
-            new_ids = np.logical_and(new_ids_min, new_ids_max)
+            new_ids = np.all(dists > self.dist_thresh, axis=1)
             if True in new_ids:
                 landmarks = np.append(
                     landmarks, observations[new_ids, :], axis=0)
-
-                landmarks = self._sort_landmarks(landmarks)
 
         self.landmarks = landmarks
 
@@ -182,7 +156,7 @@ class Mapping():
             return x, y, dx, dy
 
         if self.poses is not None:
-            max_mapsize = np.max(x[:, :2])*2
+            max_mapsize = np.max(self.poses[:, :2])*2
             mapsize = max_mapsize if max_mapsize > mapsize else mapsize
 
             # plot current robot state covariance
@@ -208,7 +182,7 @@ class Mapping():
 
         # plot all landmarks ever observed
         if l_points is not None:
-            max_mapsize = np.max(l_points)*2
+            max_mapsize = np.max(self.landmarks)*2
             mapsize = max_mapsize if max_mapsize > mapsize else mapsize
             plt.scatter(
                 l_points[:, x_id], l_points[:, y_id],
@@ -249,24 +223,48 @@ class Mapping():
                     self.checkpoints[:-1, :2],
                     metric='euclidean')
 
-                if np.any(dists < self.dist_trace_stop):
-                    print(
-                        "\nFinal do mapeamento detectado " +
-                        "pela proximidade dos checkpoints!\n")
+                if np.any(dists < self.dist_stop):
+                    print("\nFinal de trajetória detectado!")
                     self.endpoint = True
 
     def _detect_end_mapping(self, landmarks):
 
         if landmarks is not None:
 
-            shift_points = np.roll(landmarks, -1, axis=0)
-            diff = np.linalg.norm(landmarks - shift_points, axis=0)
+            # Split and Merge test
+            dists = distance.cdist(
+                landmarks,
+                landmarks,
+                metric='euclidean')
 
-            if np.all(diff < self.dist_map_stop, axis=0):
-                print(
-                    "\nFinal do mapeamento detectado " +
-                    "pela proximidade dos landmarks!\n")
-                self.endpoint = True
+            """max_dist = np.max(dists)
+            max_dist_idx = np.where(dists == max_dist)
+
+            if len(landmarks) > 2:
+                idx1, idx2 = max_dist_idx[0]
+                p1 = landmarks[idx1]
+                p2 = landmarks[idx2]
+                p3 = np.delete(landmarks, [idx1, idx2], axis=0)
+
+                x = np.stack([p1[0], p2[0]])
+                y = np.stack([p1[1], p2[1]])
+                A = np.vstack([x, np.ones(len(x))]).T
+                m, c = np.linalg.lstsq(A, y, rcond=None)[0]
+                plt.plot(m*x + c, x, 'm', linestyle="dashed")
+
+                # Distance = (| a*x1 + b*y1 + c |) / (sqrt( a*a + b*b))
+                d = np.abs(np.linalg.norm(np.cross(p2-p1, p1-p3)))/max_dist
+                # d = np.abs(m*x + c) / max_dist
+                # print("dists", d)
+
+                for p in p3:
+                    plt.plot([p1[1], p[1]], [p1[0], p[0]], color="k", marker="--")
+                plt.pause(0.001)"""
+
+            # print("dists", dists)
+            # print("test", np.any(dists < self.dist_thresh, axis=0))
+            """if np.any(dists < self.dist_thresh, axis=0):
+                self.endpoint = True"""
 
     def _convex_hull(self, points):
         hull_points = []
@@ -321,8 +319,8 @@ class Mapping():
             plt.plot(hull_points[:, 1], hull_points[:, 0], color=(0, 0, 1))
 
             mapsize = self.mapsize
-            plt.xlim([1.1*mapsize/2, -1.1*mapsize/2])
-            plt.ylim([-1.1*mapsize/2, 1.1*mapsize/2])
+            plt.xlim([mapsize/2, -mapsize/2])
+            plt.ylim([-mapsize/2, mapsize/2])
             plt.title('Area encontrada: ' + str(area) + 'm2')
             plt.show()
 
@@ -330,12 +328,12 @@ class Mapping():
             print("Sem pontos mapeados para calcular!")
 
     def update(self):
-        if not self.endpoint:
-            if self.odometry is not None:
-                self._update_pose(pose=self.odometry)
-                self._update_landmarks(range_bearings=self.laser_scan)
-                self._detect_end_trajectory(poses=self.poses)
-                self._detect_end_mapping(landmarks=self.landmarks)
+        if self.odometry is not None:
+            self._update_pose(pose=self.odometry)
+            self._update_landmarks(range_bearings=self.laser_scan)
+            self._detect_end_trajectory(poses=self.poses)
 
-            if self.plot:
-                self._plot_map()
+        if self.plot:
+            self._plot_map()
+
+        self._detect_end_mapping(landmarks=self.landmarks)

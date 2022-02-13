@@ -18,6 +18,7 @@ class Controller():
     def __init__(self):
 
         # Posições de amostragem para LaserScan e distâncias iniciais
+        self.fov = 1.5*np.pi
         self.left_dist = 99999.
         self.leftfront_dist = 99999.
         self.front_dist = 99999.
@@ -30,9 +31,9 @@ class Controller():
         self.current_yaw = 0.0
 
         # Velocidades
-        self.speed_linear_fast = 0.2  # m/s
+        self.speed_linear_fast = 0.20  # m/s
         self.speed_linear_slow = 0.1  # m/s
-        self.speed_angular_fast = 2.0  # rad/s
+        self.speed_angular_fast = 0.7  # rad/s
         self.speed_angular_slow = 0.3  # rad/s
 
         # Estado do seguidor de parede
@@ -184,11 +185,14 @@ class Controller():
             msg.angular.z = 0
             self.closed = True
 
+        """msg.linear.x = 1
+        msg.angular.z = 0.5"""
+
         # Envia mensagem da velocidade atualizada
         self.velocity_publisher.publish(msg)
 
         # Mostra distâncias detectadas pelo LaserScan
-        print(
+        """print(
             "\npose:" +
             " [x=" + str(round(self.current_x, 2)) +
             "; y=" + str(round(self.current_y, 2)) +
@@ -200,4 +204,4 @@ class Controller():
             " s45=" + str(round(self.rightfront_dist, 2)) +
             " s0=" + str(round(self.right_dist, 2)) + "] " +
             "\nrobot state: " + self.robot_state + "\n"
-        )
+        )"""
