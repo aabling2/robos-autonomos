@@ -28,26 +28,32 @@ def main():
         except Exception:
             pass
 
+    # Mantém nodes enquanto não finalizar
     while not rospy.is_shutdown() and not controller.closed:
+
+        # Atualiza controles do robô
         controller.follow_wall()
+
+        # Atualiza mapeamento do ambiente
         mapping.update()
 
+        # Finaliza controle do robô se ponto final detectado
         if mapping.endpoint:
             controller.finish = True
 
         try:
             rate.sleep()
-
         except Exception:
             break
 
     # Calcula area do mapa gerado
     mapping.calc_area()
 
-    # Aguarda finalizar o processo
+    # Deleta objetos da memória
     del controller
     del mapping
 
+    # Aguarda finalizar o processo
     rospy.spin()
 
 

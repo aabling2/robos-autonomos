@@ -34,13 +34,14 @@ class Controller():
         self.speed_linear_slow = 0.1  # m/s
         self.speed_angular_fast = 2.0  # rad/s
         self.speed_angular_slow = 0.3  # rad/s
+        self.speed_factor = 0.5
 
         # Estado do seguidor de parede
-        self.robot_state = ""
+        self.robot_state = "turn left"
 
         # Distância a ser mantida da parede
-        self.dist_wall_close = 0.75  # metros
-        self.dist_wall_thresh = 0.85  # metros
+        self.dist_wall_close = 0.5  # metros
+        self.dist_wall_thresh = 0.7  # metros
 
         # Flags
         self.searching_wall = True
@@ -126,10 +127,11 @@ class Controller():
 
     def _update_search(self, msg, dist_thresh):
         self.robot_state = "searching wall..."
-        if self.front_dist > dist_thresh and\
-                self.rightfront_dist > dist_thresh:
-            msg.linear.x = self.speed_linear_fast
-            if self.rightfront_dist < self.front_dist:
+        front_dist = self.front_dist
+        rightfront_dist = self.rightfront_dist
+        if front_dist > dist_thresh and rightfront_dist > dist_thresh:
+            # msg.linear.x = self.speed_linear_fast
+            if rightfront_dist < front_dist:
                 msg.angular.z = -self.speed_angular_slow
             else:
                 msg.angular.z = 0
@@ -137,7 +139,7 @@ class Controller():
             self.searching_wall = False
 
     def _update_controls(self, msg, dist_min, dist_max):
-        if self.leftfront_dist < dist_min or self.front_dist < dist_min or\
+        """if self.leftfront_dist < dist_min or self.front_dist < dist_min or\
                 self.rightfront_dist < dist_min:
             self.robot_state = "caution"
             msg.linear.x = 0
@@ -147,7 +149,7 @@ class Controller():
             msg.linear.x = self.speed_linear_slow
         else:
             self.robot_state = "going fast, "
-            msg.linear.x = self.speed_linear_fast
+            msg.linear.x = self.speed_linear_fast"""
 
         if self.front_dist < dist_max or self.rightfront_dist < dist_min:
             self.robot_state += "turning fast -"
@@ -178,6 +180,18 @@ class Controller():
         # Distância da parede
         d1 = self.dist_wall_close
         d2 = self.dist_wall_thresh
+
+        ranges = [
+            self.left_dist,
+            self.leftfront_dist,
+            self.front_dist,
+            self.rightfront_dist,
+            self.right_dist
+        ]
+
+        # Controle da velocidade linear conforme menor distância medida
+        min_dist = np.min(ranges)
+        msg.linear.x = (min_dist - d1) * self.speed_factor
 
         # Atualiza busca inicial ou controles da navegação
         if self.searching_wall:

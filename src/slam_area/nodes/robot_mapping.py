@@ -13,6 +13,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 
 
+# Modelo do sensor laser
 class SICK_LMS511:
     range = 80  # metros
     angle = 270  # graus
@@ -22,29 +23,29 @@ class SICK_LMS511:
     rad_max_angle = rad_angle/2
 
 
+# Mapeia ambiente pela odometria e pontos do sensor
 class Mapping():
     def __init__(self, plot=False, dist_thresh_min=1, dist_thresh_max=2,
                  dist_trace_stop=1, dist_map_stop=2,
                  steps_checkpoint=20, laser_samples=10):
 
-        self.mapsize = 5.0
-        self.plot = plot
-        self.endpoint = False
+        self.mapsize = 5.0  # tamanho inicial do mapa
+        self.plot = plot  # habilita exibição do mapa
+        self.endpoint = False  # flag de ponto final
+        self.check_steps = steps_checkpoint  # passos até próximo checkpoint
+        self.check_count = 0  # contador de passos
 
-        self.poses = None
-        self.range_bearings = None
-        self.landmarks = None
+        self.poses = None  # poses salvas
+        self.landmarks = None  # pontos de detectados para o mapa
+        self.checkpoints = None  # pontos de checkagem do robô
+        self.odometry = None  # odometria
+        self.laser_scan = None  # amostras do laser
 
+        # Limiares de distância euclideana
         self.dist_thresh_min = dist_thresh_min
         self.dist_thresh_max = dist_thresh_max
         self.dist_trace_stop = dist_trace_stop
         self.dist_map_stop = dist_map_stop
-
-        self.checkpoints = None
-        self.check_steps = steps_checkpoint
-        self.check_count = 0
-
-        self.finish = False
 
         # Sensor laser de alcance
         self.laser = SICK_LMS511()
@@ -55,16 +56,13 @@ class Mapping():
             self.laser.rad_min_angle, self.laser.rad_max_angle,
             laser_samples, dtype=np.float32).reshape(-1, 1)
 
-        self.odometry = None
-        self.laser_scan = None
-
+        # Tópicos de comunicação
         self.odom_subscriber = rospy.Subscriber(
             name='/jackal_velocity_controller/odom',
             data_class=Odometry,
             callback=self.odom_callback,
             queue_size=10
         )
-
         self.scan_subscription = rospy.Subscriber(
             name='/front/scan',
             data_class=LaserScan,
@@ -101,6 +99,7 @@ class Mapping():
             self.laser_angles,
         ]).reshape(-1, 2)
 
+    # Formata coordenada observada
     def _observation_model(self, pose, range_bearings):
         rx, ry, ra = pose
         ranges, bearings = range_bearings[:, 0], range_bearings[:, 1]
@@ -113,6 +112,7 @@ class Mapping():
 
         return np.hstack([mx, my])
 
+    # Ordena landmarks pela proximidade entre os vizinhos
     def _sort_landmarks(self, landmarks):
         N = landmarks.shape[0]
         dists = distance.cdist(landmarks, landmarks, metric='euclidean')
@@ -135,12 +135,14 @@ class Mapping():
 
         return np.array(sorted_landmarks, dtype=np.float32)
 
+    # Atualiza vetor de poses
     def _update_pose(self, pose):
         if self.poses is None:
             self.poses = np.array([pose])
         else:
             self.poses = np.vstack([self.poses, pose])
 
+    # Atualiza vetor de landmarks
     def _update_landmarks(self, range_bearings):
         pose = self.poses[-1, :]
         landmarks = self.landmarks
@@ -160,6 +162,7 @@ class Mapping():
 
         self.landmarks = landmarks
 
+    # Plota mapa gerado
     def _plot_map(self):
         plt.subplot(131, aspect='equal')
         plt.clf()
@@ -185,10 +188,10 @@ class Mapping():
             max_mapsize = np.max(x[:, :2])*2
             mapsize = max_mapsize if max_mapsize > mapsize else mapsize
 
-            # plot current robot state covariance
+            # Posição e sentido do robô
             plt.arrow(*state_arrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
 
-            # plot current robot field of view
+            # Limites do campo de visão do sensor
             mid_fov = fov/2
             plt.plot(
                 [x[-1, x_id], x[-1, x_id]+50*np.sin(x[-1, 2] + mid_fov)],
@@ -199,14 +202,14 @@ class Mapping():
                 [x[-1, y_id], x[-1, y_id]+50*np.cos(x[-1, 2] - mid_fov)],
                 color="r")
 
-            # plot robot state history
+            # Histórico de poses
             for i in range(1, len(x)):
                 plt.plot(
                     [x[i-1, x_id], x[i, x_id]],
                     [x[i-1, y_id], x[i, y_id]],
                     color="c")
 
-        # plot all landmarks ever observed
+        # Landmarks observadas
         if l_points is not None:
             max_mapsize = np.max(l_points)*2
             mapsize = max_mapsize if max_mapsize > mapsize else mapsize
@@ -214,12 +217,13 @@ class Mapping():
                 l_points[:, x_id], l_points[:, y_id],
                 marker='D', s=12, color=(0, 0, 0))
 
+        # Checkpoints salvos
         if c_points is not None:
             plt.scatter(
                 c_points[:, x_id], c_points[:, y_id],
                 marker='s', s=20, color=(1, 0, 0))
 
-        # plot settings
+        # Plot
         plt.xlim([1.1*mapsize/2, 1.1*-mapsize/2])
         plt.ylim([1.1*-mapsize/2, 1.1*mapsize/2])
         plt.xlabel("Y-gazebo")
@@ -229,6 +233,7 @@ class Mapping():
         # plt.show()
         self.mapsize = mapsize
 
+    # Detecta final da trajetória pelo histórico de poses
     def _detect_end_trajectory(self, poses):
         if poses is not None:
             if self.check_count == self.check_steps:
@@ -255,6 +260,7 @@ class Mapping():
                         "pela proximidade dos checkpoints!\n")
                     self.endpoint = True
 
+    # Detecta final do mapeamento pela distância dos pontos ordenados
     def _detect_end_mapping(self, landmarks):
 
         if landmarks is not None:
@@ -268,6 +274,7 @@ class Mapping():
                     "pela proximidade dos landmarks!\n")
                 self.endpoint = True
 
+    # Forma polígono pelos pontos encontrados
     def _convex_hull(self, points):
         hull_points = []
 
@@ -303,14 +310,16 @@ class Mapping():
 
         return np.array(hull_points, dtype=np.float32)
 
+    # Calcula área pela formula de Shoelace
     def _shoelace_area(self, points):
         lines = np.hstack([points, np.roll(points, -1, axis=0)])
         area = 0.5*abs(sum(x1*y2-x2*y1 for x1, y1, x2, y2 in lines))
         return round(area, 2)
 
+    # Detecta polígono e calcula área
     def calc_area(self):
         if self.landmarks is not None:
-            print("Fechando pontos...")
+            print("\nFechando pontos...")
             points = self.landmarks
             hull_points = self._convex_hull(points)
 
@@ -329,6 +338,7 @@ class Mapping():
         else:
             print("Sem pontos mapeados para calcular!")
 
+    # Atualiza estados
     def update(self):
         if not self.endpoint:
             if self.odometry is not None:
