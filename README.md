@@ -29,6 +29,7 @@ Cálculo da área de um ambiente desconhecido utilizando robô móvel e sensoria
 * Python (>=2.7, >=3.6)
 * ROS (apenas ROS Melodic foi testado)          | `$ source install/intall_ros_melodic.sh`
 * Xterm; Gazebo; Clearpath Jackal simulator     | `$ source install/install_ros_packages.sh`
+* Numpy; Scipy; Matplotlib                      | `$ pip install -r requirements.txt`
 
 # Build & Run
 
