@@ -41,7 +41,7 @@ class Mapping():
         self.odometry = None  # odometria
         self.laser_scan = None  # amostras do laser
 
-        # Limiares de distância euclideana
+        # Limiares de distância euclidiana
         self.dist_thresh_min = dist_thresh_min
         self.dist_thresh_max = dist_thresh_max
         self.dist_trace_stop = dist_trace_stop
@@ -310,7 +310,7 @@ class Mapping():
 
         return np.array(hull_points, dtype=np.float32)
 
-    # Calcula área pela formula de Shoelace
+    # Calcula área pela formula shoelace
     def _shoelace_area(self, points):
         lines = np.hstack([points, np.roll(points, -1, axis=0)])
         area = 0.5*abs(sum(x1*y2-x2*y1 for x1, y1, x2, y2 in lines))

@@ -202,10 +202,10 @@ class Controller():
             "; y=" + str(round(self.current_y, 2)) +
             "; yaw=" + str(round(self.current_yaw, 2)) + "]" +
             "\nrange finder:" +
-            " [s180=" + str(round(self.left_dist, 2)) +
-            " s135=" + str(round(self.leftfront_dist, 2)) +
-            " s90=" + str(round(self.front_dist, 2)) +
-            " s45=" + str(round(self.rightfront_dist, 2)) +
-            " s0=" + str(round(self.right_dist, 2)) + "] " +
-            "\nrobot state: " + self.robot_state + "\n"
+            " [s225=" + str(round(self.left_dist, 2)) +
+            " s180=" + str(round(self.leftfront_dist, 2)) +
+            " s135=" + str(round(self.front_dist, 2)) +
+            " s90=" + str(round(self.rightfront_dist, 2)) +
+            " s45=" + str(round(self.right_dist, 2)) + "] " +
+            "\nrobot state: " + self.robot_state
         )
