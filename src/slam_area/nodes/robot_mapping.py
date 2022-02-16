@@ -4,6 +4,7 @@ import rospy
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import distance
+from map_area import shoelace_area, convex_hull
 
 
 # Odometria contendo posição, orientação, vel. linear e angular
@@ -40,6 +41,7 @@ class Mapping():
         self.checkpoints = None  # pontos de checkagem do robô
         self.odometry = None  # odometria
         self.laser_scan = None  # amostras do laser
+        self.hull_points = None  # pontos que formam poligono final
 
         # Limiares de distância euclidiana
         self.dist_thresh_min = dist_thresh_min
@@ -162,77 +164,6 @@ class Mapping():
 
         self.landmarks = landmarks
 
-    # Plota mapa gerado
-    def _plot_map(self):
-        plt.subplot(131, aspect='equal')
-        plt.clf()
-
-        fov = self.laser.rad_angle
-        mapsize = self.mapsize
-        x = self.poses
-        l_points = self.landmarks
-        c_points = self.checkpoints
-
-        # Inverte eixos para melhor comparação com Gazebo
-        x_id, y_id = 1, 0
-
-        def state_arrow(state, size=0.1):
-            x = state[x_id]
-            y = state[y_id]
-            dx = size * np.cos(state[2])
-            dy = size * np.sin(state[2])
-            dx, dy = dy, dx  # inverte para exibir
-            return x, y, dx, dy
-
-        if self.poses is not None:
-            max_mapsize = np.max(x[:, :2])*2
-            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
-
-            # Posição e sentido do robô
-            plt.arrow(*state_arrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
-
-            # Limites do campo de visão do sensor
-            mid_fov = fov/2
-            plt.plot(
-                [x[-1, x_id], x[-1, x_id]+50*np.sin(x[-1, 2] + mid_fov)],
-                [x[-1, y_id], x[-1, y_id]+50*np.cos(x[-1, 2] + mid_fov)],
-                color="r")
-            plt.plot(
-                [x[-1, x_id], x[-1, x_id]+50*np.sin(x[-1, 2] - mid_fov)],
-                [x[-1, y_id], x[-1, y_id]+50*np.cos(x[-1, 2] - mid_fov)],
-                color="r")
-
-            # Histórico de poses
-            for i in range(1, len(x)):
-                plt.plot(
-                    [x[i-1, x_id], x[i, x_id]],
-                    [x[i-1, y_id], x[i, y_id]],
-                    color="c")
-
-        # Landmarks observadas
-        if l_points is not None:
-            max_mapsize = np.max(l_points)*2
-            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
-            plt.scatter(
-                l_points[:, x_id], l_points[:, y_id],
-                marker='D', s=12, color=(0, 0, 0))
-
-        # Checkpoints salvos
-        if c_points is not None:
-            plt.scatter(
-                c_points[:, x_id], c_points[:, y_id],
-                marker='s', s=20, color=(1, 0, 0))
-
-        # Plot
-        plt.xlim([1.1*mapsize/2, 1.1*-mapsize/2])
-        plt.ylim([1.1*-mapsize/2, 1.1*mapsize/2])
-        plt.xlabel("Y-gazebo")
-        plt.ylabel("X-gazebo")
-        plt.title('Mapeando area...')
-        plt.pause(0.001)
-        # plt.show()
-        self.mapsize = mapsize
-
     # Detecta final da trajetória pelo histórico de poses
     def _detect_end_trajectory(self, poses):
         if poses is not None:
@@ -274,57 +205,16 @@ class Mapping():
                     "pela proximidade dos landmarks!\n")
                 self.endpoint = True
 
-    # Forma polígono pelos pontos encontrados
-    def _convex_hull(self, points):
-        hull_points = []
-
-        # Pega ponto mais a esquerda
-        start_point = points[np.argmin(points[:, 0], axis=0)]
-        point = start_point
-        hull_points.append(start_point)
-        far_point = None
-
-        while np.all(far_point != start_point):
-            p1 = None
-            for p in points:
-                if np.all(p == point):
-                    continue
-                else:
-                    p1 = p
-                    break
-
-            far_point = p1
-            for p2 in points:
-                if np.all(p2 == point) or np.all(p2 == p1):
-                    continue
-                else:
-                    diff = (
-                        ((p2[0] - point[0]) * (far_point[1] - point[1]))
-                        - ((far_point[0] - point[0]) * (p2[1] - point[1]))
-                    )
-                    if diff > 0:
-                        far_point = p2
-
-            hull_points.append(far_point)
-            point = far_point
-
-        return np.array(hull_points, dtype=np.float32)
-
-    # Calcula área pela formula shoelace
-    def _shoelace_area(self, points):
-        lines = np.hstack([points, np.roll(points, -1, axis=0)])
-        area = 0.5*abs(sum(x1*y2-x2*y1 for x1, y1, x2, y2 in lines))
-        return round(area, 2)
-
     # Detecta polígono e calcula área
     def calc_area(self):
         if self.landmarks is not None:
             print("\nFechando pontos...")
             points = self.landmarks
-            hull_points = self._convex_hull(points)
+            hull_points = convex_hull(points)
+            self.hull_points = hull_points
 
             print("Calculando area...")
-            area = self._shoelace_area(hull_points)
+            area = shoelace_area(hull_points)
             print("Area encontrada: " + str(area) + "m2")
 
             plt.plot(hull_points[:, 1], hull_points[:, 0], color=(0, 0, 1))
@@ -337,6 +227,77 @@ class Mapping():
 
         else:
             print("Sem pontos mapeados para calcular!")
+
+    # Plota mapa gerado
+    def _plot_map(self):
+        plt.subplot(131, aspect='equal')
+        plt.clf()
+
+        fov = self.laser.rad_angle
+        mapsize = self.mapsize
+        x = self.poses
+        l_points = self.landmarks
+        c_points = self.checkpoints
+
+        # Inverte eixos para melhor comparação com Gazebo
+        x_id, y_id = 1, 0
+
+        def state_arrow(state, size=0.1):
+            x = state[x_id]
+            y = state[y_id]
+            dx = size * np.cos(state[2])
+            dy = size * np.sin(state[2])
+            dx, dy = dy, dx  # inverte para exibir
+            return x, y, dx, dy
+
+        if self.poses is not None:
+            max_mapsize = np.max(np.abs(x[:, :2]))*2
+            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
+
+            # Posição e sentido do robô
+            plt.arrow(*state_arrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
+
+            # Limites do campo de visão do sensor
+            mid_fov = fov/2
+            plt.plot(
+                [x[-1, x_id], x[-1, x_id]+50*np.sin(x[-1, 2] + mid_fov)],
+                [x[-1, y_id], x[-1, y_id]+50*np.cos(x[-1, 2] + mid_fov)],
+                color="r")
+            plt.plot(
+                [x[-1, x_id], x[-1, x_id]+50*np.sin(x[-1, 2] - mid_fov)],
+                [x[-1, y_id], x[-1, y_id]+50*np.cos(x[-1, 2] - mid_fov)],
+                color="r")
+
+            # Histórico de poses
+            for i in range(1, len(x)):
+                plt.plot(
+                    [x[i-1, x_id], x[i, x_id]],
+                    [x[i-1, y_id], x[i, y_id]],
+                    color="c")
+
+        # Landmarks observadas
+        if l_points is not None:
+            max_mapsize = np.max(np.abs(l_points))*2
+            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
+            plt.scatter(
+                l_points[:, x_id], l_points[:, y_id],
+                marker='D', s=12, color=(0, 0, 0))
+
+        # Checkpoints salvos
+        if c_points is not None:
+            plt.scatter(
+                c_points[:, x_id], c_points[:, y_id],
+                marker='s', s=20, color=(1, 0, 0))
+
+        # Plot
+        plt.xlim([1.1*mapsize/2, 1.1*-mapsize/2])
+        plt.ylim([1.1*-mapsize/2, 1.1*mapsize/2])
+        plt.xlabel("Y-gazebo")
+        plt.ylabel("X-gazebo")
+        plt.title('Mapeando area...')
+        plt.pause(0.001)
+        # plt.show()
+        self.mapsize = mapsize
 
     # Atualiza estados
     def update(self):

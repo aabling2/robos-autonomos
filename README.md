@@ -5,14 +5,14 @@ Cálculo da área de um ambiente desconhecido utilizando o robô móvel Clearpat
 ### Requisitos
 
 * Python (>=2.7, >=3.6)
-* ROS (apenas ROS Melodic foi testado)          | `$ source install/intall_ros_melodic.sh`
-* Xterm; Gazebo; Clearpath Jackal simulator     | `$ source install/install_ros_packages.sh`  (versões para melodic)
-* Numpy; Scipy; Matplotlib                      | `$ pip install -r requirements.txt`
+* ROS (apenas ROS Melodic foi testado)      | `$ source install/intall_ros_melodic.sh`
+* Gazebo; Clearpath Jackal simulator        | `$ source install/install_ros_packages.sh`  (versões para melodic)
+* Numpy; Scipy; Matplotlib; Shapely         | `$ pip install -r requirements.txt`
 
 ### Build & Run
 
-* Compilar pacote 'slam_area'                   | `$ source build.sh`
-* Rodar launch de simulação                     | `$ source launch.sh <world1 ou world2>`
+* Compilar pacote 'slam_area'               | `$ source build.sh`
+* Rodar launch de simulação                 | `$ source launch.sh <world1 ou world2>`
 
 ### Solução proposta
 

@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 import rospy
+import numpy as np
 from robot_controller import Controller
 from robot_mapping import Mapping
+from map_benchmark import Benchmark
 
 # Amostras de distâncias obtidas pelo LaserScan
 from sensor_msgs.msg import LaserScan
@@ -10,10 +12,12 @@ from sensor_msgs.msg import LaserScan
 
 def main():
 
-    # Cria node do controlador do robô
+    # Cria node de controlador e mapeamento do robô
     rospy.wait_for_service('gazebo/set_physics_properties')
     rospy.init_node('slam_area', anonymous=True)
     rate = rospy.Rate(10)  # 10hz
+
+    benchmark = Benchmark()
     controller = Controller()
     mapping = Mapping(
         plot=True, dist_thresh_min=0.3, dist_thresh_max=0.4,
@@ -48,6 +52,12 @@ def main():
 
     # Calcula area do mapa gerado
     mapping.calc_area()
+
+    # Calcula taxa de acerto, precisão, erro de mapeamento
+    benchmark.run(
+        points_true=np.float32(
+            [[2.18, 2.05], [2.18, -1.15], [-1.55, -1.15], [-1.55, 2.05]]),
+        points_pred=mapping.hull_points)
 
     # Deleta objetos da memória
     del controller
