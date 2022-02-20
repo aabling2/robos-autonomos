@@ -1,7 +1,0 @@
-<include file="$(find jackal_gazebo)/launch/spawn_jackal.launch">
-  <!-- Optionally configure the spawn position -->
-  <arg name="x" value="$(arg x)"/>
-  <arg name="y" value="$(arg y)"/>
-  <arg name="z" value="$(arg z)"/>
-  <arg name="yaw" value="$(arg yaw)"/>
-</include>

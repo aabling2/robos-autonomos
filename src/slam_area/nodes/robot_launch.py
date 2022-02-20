@@ -21,7 +21,7 @@ def main():
     controller = Controller()
     mapping = Mapping(
         plot=True, dist_thresh_min=0.3, dist_thresh_max=0.4,
-        dist_trace_stop=0.5, dist_map_stop=2.,
+        dist_trace_stop=0.5, dist_map_stop=4.0,
         steps_checkpoint=40, laser_samples=35)
 
     # Espera tópico do laser abrir
@@ -54,10 +54,13 @@ def main():
     mapping.calc_area()
 
     # Calcula taxa de acerto, precisão, erro de mapeamento
-    benchmark.run(
-        points_true=np.float32(
-            [[2.18, 2.05], [2.18, -1.15], [-1.55, -1.15], [-1.55, 2.05]]),
-        points_pred=mapping.hull_points)
+    # Apenas para world1
+    world = 1
+    if world == 1:
+        benchmark.run(
+            points_true=np.float32(
+                [[2.18, 2.05], [2.18, -1.15], [-1.55, -1.15], [-1.55, 2.05]]),
+            points_found=mapping.hull_points)
 
     # Deleta objetos da memória
     del controller

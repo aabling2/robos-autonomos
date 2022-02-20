@@ -137,14 +137,29 @@ class Mapping():
 
         return np.array(sorted_landmarks, dtype=np.float32)
 
-    # Atualiza vetor de poses
+    # Atualiza histórico de poses
     def _update_pose(self, pose):
         if self.poses is None:
             self.poses = np.array([pose])
         else:
             self.poses = np.vstack([self.poses, pose])
 
-    # Atualiza vetor de landmarks
+    # Atualiza histórico de checkpoints
+    def _update_checkpoints(self, poses):
+        if poses is not None:
+            if self.check_count == self.check_steps:
+                if self.checkpoints is None:
+                    self.checkpoints = poses[-1, :].reshape((1, 3))
+                else:
+                    self.checkpoints = np.append(
+                        self.checkpoints,
+                        poses[-1, :].reshape((1, 3)),
+                        axis=0)
+                    self.check_count = 0
+            else:
+                self.check_count += 1
+
+    # Atualiza histórico de landmarks
     def _update_landmarks(self, range_bearings):
         pose = self.poses[-1, :]
         landmarks = self.landmarks
@@ -165,31 +180,18 @@ class Mapping():
         self.landmarks = landmarks
 
     # Detecta final da trajetória pelo histórico de poses
-    def _detect_end_trajectory(self, poses):
-        if poses is not None:
-            if self.check_count == self.check_steps:
-                if self.checkpoints is None:
-                    self.checkpoints = poses[-1, :].reshape((1, 3))
-                else:
-                    self.checkpoints = np.append(
-                        self.checkpoints,
-                        poses[-1, :].reshape((1, 3)),
-                        axis=0)
-                self.check_count = 0
-            else:
-                self.check_count += 1
+    def _detect_end_trajectory(self, poses, checkpoints):
+        if poses is not None and checkpoints is not None:
+            dists = distance.cdist(
+                poses[-1, :2].reshape(1, 2),
+                checkpoints[:-1, :2],
+                metric='euclidean')
 
-            if self.checkpoints is not None:
-                dists = distance.cdist(
-                    poses[-1, :2].reshape(1, 2),
-                    self.checkpoints[:-1, :2],
-                    metric='euclidean')
-
-                if np.any(dists < self.dist_trace_stop):
-                    print(
-                        "\nFinal do mapeamento detectado " +
-                        "pela proximidade dos checkpoints!\n")
-                    self.endpoint = True
+            if np.any(dists < self.dist_trace_stop):
+                print(
+                    "\nFinal do mapeamento detectado " +
+                    "pela proximidade dos checkpoints!\n")
+                self.endpoint = True
 
     # Detecta final do mapeamento pela distância dos pontos ordenados
     def _detect_end_mapping(self, landmarks):
@@ -304,8 +306,10 @@ class Mapping():
         if not self.endpoint:
             if self.odometry is not None:
                 self._update_pose(pose=self.odometry)
+                self._update_checkpoints(poses=self.poses)
                 self._update_landmarks(range_bearings=self.laser_scan)
-                self._detect_end_trajectory(poses=self.poses)
+                self._detect_end_trajectory(
+                    poses=self.poses, checkpoints=self.checkpoints)
                 self._detect_end_mapping(landmarks=self.landmarks)
 
             if self.plot:
