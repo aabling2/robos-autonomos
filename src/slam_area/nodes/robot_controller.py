@@ -118,11 +118,11 @@ class Controller():
         # n_laser_beams = len(msg.ranges) = 720
         # max_angle = 270
         # r = n_laser_beams/max_angle = 2.6666 -> 2.6666*angle
-        self.left_dist = msg.ranges[600]  # 225
-        self.leftfront_dist = msg.ranges[480]  # 180
-        self.front_dist = msg.ranges[360]  # 135
-        self.rightfront_dist = msg.ranges[240]  # 90
-        self.right_dist = msg.ranges[120]  # 45
+        self.left_dist = msg.ranges[600]  # 90
+        self.leftfront_dist = msg.ranges[480]  # 45
+        self.front_dist = msg.ranges[360]  # 0
+        self.rightfront_dist = msg.ranges[240]  # -45
+        self.right_dist = msg.ranges[120]  # -90
 
     def _update_search(self, msg, dist_thresh):
         self.robot_state = "searching wall..."
@@ -202,10 +202,10 @@ class Controller():
             "; y=" + str(round(self.current_y, 2)) +
             "; yaw=" + str(round(self.current_yaw, 2)) + "]" +
             "\nrange finder:" +
-            " [s225=" + str(round(self.left_dist, 2)) +
-            " s180=" + str(round(self.leftfront_dist, 2)) +
-            " s135=" + str(round(self.front_dist, 2)) +
-            " s90=" + str(round(self.rightfront_dist, 2)) +
-            " s45=" + str(round(self.right_dist, 2)) + "] " +
+            " [s90=" + str(round(self.left_dist, 2)) +
+            " s45=" + str(round(self.leftfront_dist, 2)) +
+            " s0=" + str(round(self.front_dist, 2)) +
+            " s-45=" + str(round(self.rightfront_dist, 2)) +
+            " s-90=" + str(round(self.right_dist, 2)) + "] " +
             "\nrobot state: " + self.robot_state
         )
