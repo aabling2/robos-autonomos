@@ -1,0 +1,11 @@
+goals_loop: false
+goal_topic: /move_base_simple/goal
+path_rate: 10
+goal_tolerances:
+    xy: 0.3
+    theta: 0.45
+csv_header: true
+frame_id: odom #map
+update_params_service: /update_parameters
+wait_time: 5 #15
+delay_time: 5 #10
