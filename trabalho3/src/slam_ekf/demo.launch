@@ -1,0 +1,16 @@
+<launch>
+    <arg name="world" default="world0"/>
+    <arg name="platform" value="jackal"/>
+    <arg name="config" value="front_laser"/>
+    <include file="$(find jackal_gazebo)/launch/jackal_world.launch">
+        <arg name="joystick" default="false"/>
+        <arg name="world_name" value="$(find slam_ekf)/worlds/$(arg world)"/>
+    </include>
+
+    <include file="$(find jackal_navigation)/launch/odom_navigation_demo.launch"/>
+
+    <include file="$(find path_generator)/launch/goals_from_csv.launch"/>
+
+    <include file="$(find slam_ekf)/launch/ekf_mapping.launch"/>
+
+</launch>

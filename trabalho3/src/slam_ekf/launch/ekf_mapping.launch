@@ -1,0 +1,12 @@
+<launch>
+
+    <node 
+        name="ekf_mapping"
+        pkg="slam_ekf"
+        type="robot_launch.py"
+        launch-prefix="xterm -e"
+        required="true"
+        output="screen"
+    ><remap from="scan" to="front/scan"/></node>
+
+</launch>
