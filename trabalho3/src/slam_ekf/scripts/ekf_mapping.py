@@ -12,6 +12,10 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 
 
+# Twist é a velocidade linear e angular
+from geometry_msgs.msg import Twist
+
+
 # Modelo do sensor laser
 class SICK_LMS511:
     range = 80  # metros
@@ -24,7 +28,8 @@ class SICK_LMS511:
 
 # Mapeia ambiente pela odometria e pontos do sensor
 class Mapping():
-    def __init__(self, plot=False, dist_thresh_min=1, dist_thresh_max=2, laser_samples=10):
+    def __init__(self, plot=False, dist_thresh_min=1, dist_thresh_max=2,
+                 laser_samples=10):
 
         self.mapsize = 5.0  # tamanho inicial do mapa
         self.plot = plot  # habilita exibição do mapa
@@ -34,6 +39,7 @@ class Mapping():
         self.landmarks = None  # pontos de detectados para o mapa
         self.odometry = None  # odometria
         self.laser_scan = None  # amostras do laser
+        self.velocity = np.zeros(4)  # vt-1, wt-1, vt, wt
 
         # Limiares de distância euclidiana
         self.dist_thresh_min = dist_thresh_min
@@ -81,38 +87,12 @@ class Mapping():
             callback=self.scan_callback,
             queue_size=10
         )
-
-    def belief_init(self, num_landmarks):
-        self.bel_mean = np.zeros(3+2*num_landmarks)
-        self.bel_cov = 1e6*np.eye(3+2*num_landmarks)
-        self.bel_cov[:3, :3] = .0
-        self.c_prob = 0.5*np.ones((num_landmarks, 1))
-
-    # Random motion noise
-    def add_noise(self, odometry):
-        motion_noise = np.matmul(np.random.randn(1, 3), self.Rt)[0]
-        return odometry + motion_noise
-
-    def convert_odometry(self, pose, odometry):
-        drot1 = pose[2]
-        drot2 = odometry[2]
-        dtrans = np.linalg.norm(odometry[:2] - pose[:2])
-        return drot1, dtrans, drot2
-
-    def odometry_model(self, pose, odometry):
-        rx, ry, ra = pose
-        drot1, dtrans, drot2 = odometry
-
-        rx += dtrans*np.cos(ra+drot1)
-        ry += dtrans*np.sin(ra+drot1)
-        ra += (drot1 + drot2 + np.pi) % (2*np.pi) - np.pi
-
-        motion = np.array([
-            dtrans*np.cos(ra+drot1),
-            dtrans*np.sin(ra+drot1),
-            drot1 + drot2])
-
-        return motion
+        self.velocity_subscriber = rospy.Subscriber(
+            name='/jackal_velocity_controller/cmd_vel',
+            data_class=Twist,
+            callback=self.velocity_callback,
+            queue_size=10
+        )
 
     # Callback de odometria do robô (posição e orientação)
     # em '/jackal_velocity_controller/odom'
@@ -143,7 +123,52 @@ class Mapping():
             self.laser_angles,
         ]).reshape(-1, 2)
 
-    # Formata coordenada observada
+    # Callback das velocidades lineares e angulares
+    # em '/jackal_velocity_controller/cmd_vel'
+    def velocity_callback(self, msg):
+        # Velocidade linear em frente para o robô
+        v = msg.linear.x
+
+        # Velocidade angular em torno do eixo z do robô
+        yaw_rate = msg.angular.z
+
+        # Atualiza vetor de velocidades
+        self.velocity[2:4] = np.array([v, yaw_rate])
+
+    # Probabilidades iniciais
+    def _belief_init(self, num_landmarks):
+        self.bel_mean = np.zeros(3+2*num_landmarks)
+        self.bel_cov = 1e6*np.eye(3+2*num_landmarks)
+        self.bel_cov[:3, :3] = .0
+
+    # Modelos de movimento normal e Jacobiano
+    def _motion_models(self, pose, odometry, velocity):
+        rx0, ry0, ra0 = pose
+        rx1, ry1, ra1 = odometry
+        vt0, wt0, vt1, wt1 = velocity
+        vw = vt1/wt1 if wt1 > .0 else .0
+        dw = abs(wt1-wt0)
+
+        # Motion model
+        motion = np.array([
+            -vw*np.sin(ra0) + vw*np.sin(ra0+dw),
+            vw*np.cos(ra0) - vw*np.cos(ra0+dw),
+            dw
+        ])
+
+        # Jacobian motion model
+        jacobian = np.array([
+            [0, 0, -vw*np.cos(ra0) + vw*np.cos(ra0+dw)],
+            [0, 0, -vw*np.sin(ra0) + vw*np.sin(ra0+dw)],
+            [0, 0, 0]
+        ])
+
+        # Atualiza velocidade anterior
+        self.velocity[:2] = vt1, wt1
+
+        return motion, jacobian
+
+    # Cordenadas observadas pelas amostras do sensoriamento
     def _observation_model(self, pose, range_bearings):
         rx, ry, ra = pose
         ranges, bearings = range_bearings[:, 0], range_bearings[:, 1]
@@ -155,6 +180,83 @@ class Mapping():
         my = my.reshape(-1, 1)
 
         return np.hstack([mx, my])
+
+    # Etapa de predição do estado e covariância
+    def _prediction_step(self, odometry, velocity):
+        bel_mean = self.bel_mean
+        bel_cov = self.bel_cov
+        n = len(bel_mean)
+        Rt = self.Rt
+        F = np.append(np.eye(3), np.zeros((3, n-3)), axis=1)
+
+        # Define modelos de movimento normal e Jacobiano
+        motion, J = self._motion_models(bel_mean[:3], odometry, velocity)
+
+        # Predição do novo estado do robô
+        self.bel_mean = bel_mean + (F.T).dot(motion)
+
+        # Predict da nova covariância
+        Gt = np.eye(n) + (F.T).dot(J).dot(F)
+        self.bel_cov = Gt.dot(bel_cov).dot(Gt.T) + (F.T).dot(Rt).dot(F)
+
+        mu = self.bel_mean
+        print(
+            'Predicted location\t x: {0:.2} \t y: {1:.2} \t theta: {2:.2}'
+            .format(mu[0], mu[1], mu[2]))
+
+    # Etapa de correção pela comparação entre features observadas
+    def _correction_step(self, range_bearings):
+        bel_mean = self.bel_mean
+        bel_cov = self.bel_cov
+        rx, ry, ra = bel_mean[:3]
+        n_dim_state = len(bel_mean)
+        Qt = self.Qt
+        Inv = np.eye(n_dim_state)
+
+        # Features obsevadas como coordenadas cartesianas
+        observations = self._observation_model([rx, ry, ra], range_bearings)
+
+        for j, zk in enumerate(range_bearings):
+            pos = 3 + 2*j
+            mx, my = observations[j]
+            bel_mean[pos] = mx
+            bel_mean[pos+1] = my
+
+            # Predição do landmark esperado para a feat. observada
+            delta = np.array([mx - rx, my - ry])
+            q = np.dot(delta.T, delta)
+            sq = np.sqrt(q)
+            z_theta = np.arctan2(delta[1], delta[0])
+            z_hat = np.array([sq, z_theta-ra])
+
+            # Computa a matriz Jacobiana dessa observação
+            dx, dy = delta
+            F = np.zeros((5, n_dim_state))
+            F[:3, :3] = np.eye(3)
+            F[3, pos] = 1
+            F[4, pos+1] = 1
+            Hz = np.array([
+                [-sq*dx, -sq*dy, 0, sq*dx, sq*dy],
+                [dy, -dx, -q, -dy, dx]], dtype=np.float32)
+            H = (np.nan_to_num(1/q)*Hz).dot(F)  # Jacobian matrix ∂ẑ/∂(rx,ry)
+
+            # Calcula o ganho do filtro de Kalman
+            K = bel_cov.dot(H.T).dot(np.linalg.inv(H.dot(bel_cov).dot(H.T)+Qt))
+
+            # Calcula a diferença entre as obsevações reais e preditas
+            z_dif = zk - np.float32(z_hat)
+            z_dif = (z_dif + np.pi) % (2*np.pi) - np.pi
+
+            # Atualiza vetor de estados e matriz de covariância
+            bel_mean = bel_mean + (K.dot(z_dif))
+            bel_cov = (Inv-K.dot(H)).dot(bel_cov)
+
+        self.bel_mean = bel_mean
+        self.bel_cov = bel_cov
+        mu = self.bel_mean
+        print(
+            'Updated location\t x: {0:.2} \t y: {1:.2} \t theta: {2:.2}'
+            .format(mu[0], mu[1], mu[2]))
 
     # Atualiza histórico de poses
     def _update_pose(self, pose):
@@ -172,7 +274,7 @@ class Mapping():
         )
 
         landmarks = self.landmarks
-        if landmarks is None:
+        """if landmarks is None:
             landmarks = observations
         else:
             dists = distance.cdist(observations, landmarks, metric='euclidean')
@@ -181,116 +283,10 @@ class Mapping():
             new_ids = np.logical_and(new_ids_min, new_ids_max)
             if True in new_ids:
                 landmarks = np.append(
-                    landmarks, observations[new_ids, :], axis=0)
+                    landmarks, observations[new_ids, :], axis=0)"""
 
-        self.landmarks = landmarks
-
-    def _prediction_step(self, odometry):
-        bel_mean = self.bel_mean
-        bel_cov = self.bel_cov
-        n = len(bel_mean)
-        F = np.append(np.eye(3), np.zeros((3, n-3)), axis=1)
-        Rt = self.Rt
-
-        odometry = self.convert_odometry(bel_mean[:3], odometry)
-        # odometry = self.add_noise(odometry)
-        drot1, dtrans, drot2 = odometry
-        motion = self.odometry_model(bel_mean[:3], odometry)
-
-        # Compute the new mu based on the noise-free
-        self.bel_mean = bel_mean + (F.T).dot(motion)
-
-        # Define motion model Jacobian
-        J = np.array([
-            [0, 0, -dtrans*np.sin(bel_mean[2]+drot1)],
-            [0, 0,  dtrans*np.cos(bel_mean[2]+drot1)],
-            [0, 0,  0]])
-        # J = np.zeros((3, 3))
-        # J[:, 2] = motion
-        Gt = np.eye(n) + (F.T).dot(J).dot(F)
-
-        # Predict new covariance
-        self.bel_cov = Gt.dot(bel_cov).dot(Gt.T) + (F.T).dot(Rt).dot(F)
-
-        mu = self.bel_mean
-        print(
-            'Predicted location\t x: {0:.2} \t y: {1:.2} \t theta: {2:.2}'
-            .format(mu[0], mu[1], mu[2]))
-
-    def _correction_step(self, range_bearings):
-        bel_mean = self.bel_mean
-        bel_cov = self.bel_cov
-        rx, ry, ra = bel_mean[:3]
-        n_range_bearings = len(range_bearings)
-        n_dim_state = len(bel_mean)
-        # Qt = np.eye(2*n_range_bearings) * 0.01
-        Qt = self.Qt
-
-        observations = self._observation_model([rx, ry, ra], range_bearings)
-
-        # H = Jacobian matrix ∂ẑ/∂(rx,ry)
-        H = np.zeros((2*n_range_bearings, n_dim_state), dtype=np.float32)
-        zs, z_hat = [], []  # true and predicted observations
-        for (j, range_bearing) in enumerate(range_bearings):
-            pos = 3 + 2*j
-
-            if bel_cov[2*j+3][2*j+3] >= 1e6 and bel_cov[2*j+4][2*j+4] >= 1e6:
-                # Initialize its pose in mu based on the
-                # measurement and the current robot pose
-                mx, my = observations[j]
-                bel_mean[pos] = mx
-                bel_mean[pos+1] = my
-            else:
-                mx, my = bel_mean[pos:pos+2]
-
-            # Add the landmark measurement to the Z vector
-            # zs.append([range_bearing[0], range_bearing[1]])
-            zs = np.array([[range_bearing[0]], [range_bearing[1]]])
-
-            # Use the current estimate of the landmark pose
-            # to compute the corresponding expected measurement in z̄:
-            d = [mx - rx, my - ry]
-            q = np.dot(d, d)
-            sq = np.sqrt(q)
-            z_theta = np.arctan2(d[1], d[0])
-            # z_hat.append([sq, z_theta-ra])
-            z_hat = np.array([[sq], [z_theta-ra]])
-
-            # Compute the Jacobian of this observation
-            dx, dy = d
-            F = np.zeros((5, n_dim_state))
-            F[:3, :3] = np.eye(3)
-            F[3, pos] = 1
-            F[4, pos+1] = 1
-            Hi = np.array([
-                [-sq*dx, -sq*dy, 0, sq*dx, sq*dy],
-                [dy, -dx, -q, -dy, dx]],
-                dtype=np.float32)
-            Hi = (1/q*Hi).dot(F)
-
-            # Map to high dimensional space
-            pos = pos - 3
-            # H[pos:pos+2, :] = Hi
-            H = Hi
-
-            # ---------------------
-            # Calculate Kalman gain
-            K = bel_cov.dot(H.T).dot(np.linalg.inv(H.dot(bel_cov).dot(H.T)+Qt))
-
-            # Calculate difference between expected and real observation
-            z_dif = np.float32(zs) - np.float32(z_hat)
-            z_dif = (z_dif + np.pi) % (2*np.pi) - np.pi
-
-            # update state vector and covariance matrix
-            bel_mean = bel_mean + (K.dot(z_dif)).reshape(-1)
-            bel_cov = (np.eye(n_dim_state) - K.dot(H)).dot(bel_cov)
-
-        self.bel_mean = bel_mean
-        self.bel_cov = bel_cov
-        mu = self.bel_mean
-        print(
-            'Updated location\t x: {0:.2} \t y: {1:.2} \t theta: {2:.2}'
-            .format(mu[0], mu[1], mu[2]))
+        # self.landmarks = landmarks
+        self.landmarks = observations
 
     # Plota mapa gerado
     def _plot_map(self):
@@ -359,11 +355,11 @@ class Mapping():
     # Atualiza estados
     def update(self):
         if not self.belief:
-            self.belief_init(num_landmarks=len(self.laser_scan))
+            self._belief_init(num_landmarks=len(self.laser_scan))
             self.belief = True
 
         if self.odometry is not None:
-            self._prediction_step(self.odometry)
+            self._prediction_step(self.odometry, self.velocity)
             self._correction_step(self.laser_scan)
             self._update_pose(pose=self.bel_mean[:3])
             self._update_landmarks(measurement=self.bel_mean[3:])

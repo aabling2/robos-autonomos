@@ -11,5 +11,4 @@ roslaunch slam_ekf demo.launch world:=$WORLD &
 wait
 
 # roslaunch jackal_viz view_robot.launch config:=navigation
-# roslaunch jackal_viz view_robot.launch
 # rqt_graph
