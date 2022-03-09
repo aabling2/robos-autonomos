@@ -15,7 +15,7 @@ def main():
     rate = rospy.Rate(10)  # 10hz
 
     mapping = Mapping(
-        plot=True, dist_thresh_min=0.3, dist_thresh_max=0.4, laser_samples=35)
+        plot=True, dist_thresh_min=0.3, dist_thresh_max=0.4, laser_samples=20)
 
     # Espera tópico do laser abrir
     data = None
