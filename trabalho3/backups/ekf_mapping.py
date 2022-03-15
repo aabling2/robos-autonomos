@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import sys
 import rospy
 import numpy as np
 import matplotlib.pyplot as plt
@@ -35,8 +36,12 @@ class Mapping():
         self.plot = plot  # habilita exibição do mapa
         self.endpoint = False  # flag de ponto final
 
+        self.belief = False
+        self.bel_mean = None
+        self.bel_cov = None
         self.hist_poses = None  # poses salvas
         self.hist_landmarks = None  # pontos de detectados para o mapa
+        self.range_bearings = None
         self.odometry = None  # odometria
         self.laser_scan = None  # amostras do laser
         self.velocity = np.zeros(4)  # vt-1, wt-1, vt, wt
@@ -59,10 +64,6 @@ class Mapping():
 
     # Parâmetros para filtro de Kalman
     def _init_params(self):
-        self.belief = False
-        self.bel_mean = None
-        self.bel_cov = None
-        self.hist_mu = []
 
         self.R = np.array([
             [1., 0, 0],
@@ -136,15 +137,12 @@ class Mapping():
         self.velocity[2:4] = np.array([v, yaw_rate])
 
     # Probabilidades iniciais
-    def _belief_init(self, num_landmarks):
+    def _belief_init(self, range_bearings):
+        num_landmarks = len(range_bearings)
         self.bel_mean = np.zeros(3+2*num_landmarks)
         self.bel_cov = 1e6*np.eye(3+2*num_landmarks)
         self.bel_cov[:3, :3] = .0
-        self.c_prob = 0.5*np.ones(num_landmarks)
-
-    # Normaliza ângulo para valores entre -pi e pi
-    def _norm_angle(self, angle):
-        return (angle + np.pi) % (2*np.pi) - np.pi
+        self.range_bearings = range_bearings
 
     # Modelos de movimento normal e Jacobiano
     def _motion_models(self, pose, odometry, velocity):
@@ -153,19 +151,18 @@ class Mapping():
         vt0, wt0, vt1, wt1 = velocity
         vw = vt1/wt1 if wt1 > .0 else .0
         dw = abs(wt1-wt0)
-        radw = ra0+dw
 
         # Motion model
         motion = np.array([
-            -vw*np.sin(ra0) + vw*np.sin(radw),
-            vw*np.cos(ra0) - vw*np.cos(radw),
+            -vw*np.sin(ra0) + vw*np.sin(ra0+dw),
+            vw*np.cos(ra0) - vw*np.cos(ra0+dw),
             dw
         ])
 
         # Jacobian motion model
         jacobian = np.array([
-            [0, 0, -vw*np.cos(ra0) + vw*np.cos(radw)],
-            [0, 0, -vw*np.sin(ra0) + vw*np.sin(radw)],
+            [0, 0, -vw*np.cos(ra0) + vw*np.cos(ra0+dw)],
+            [0, 0, -vw*np.sin(ra0) + vw*np.sin(ra0+dw)],
             [0, 0, 0]
         ])
 
@@ -179,14 +176,51 @@ class Mapping():
         rx, ry, ra = pose
         ranges, bearings = range_bearings[:, 0], range_bearings[:, 1]
 
-        w = bearings + ra
-        mx = rx + ranges * np.cos(w)
-        my = ry + ranges * np.sin(w)
+        mx = rx + ranges * np.cos(bearings + ra)
+        my = ry + ranges * np.sin(bearings + ra)
 
         mx = mx.reshape(-1, 1)
         my = my.reshape(-1, 1)
 
         return np.hstack([mx, my])
+
+    def _split_vector(vector):
+        n = len(vector)
+        coordinates = np.hstack([
+            vector[np.arange(0, n-1, 2)].reshape(-1, 1),
+            vector[np.arange(1, n, 2)].reshape(-1, 1)]
+        )
+        return coordinates
+
+    # Converte vetor de observações para landmarks
+    def _landmarks_model(self, measurement):
+        n = len(measurement)
+        observations = np.hstack([
+            measurement[np.arange(0, n-1, 2)].reshape(-1, 1),
+            measurement[np.arange(1, n, 2)].reshape(-1, 1)]
+        )
+
+        # landmarks = self.hist_landmarks
+        """if landmarks is None:
+            landmarks = observations
+        else:
+            dists = distance.cdist(observations, landmarks, metric='euclidean')
+            new_ids_min = np.all(dists > self.dist_thresh_min, axis=1)
+            new_ids_max = np.any(dists < self.dist_thresh_max, axis=1)
+            new_ids = np.logical_and(new_ids_min, new_ids_max)
+            if True in new_ids:
+                landmarks = np.append(
+                    landmarks, observations[new_ids, :], axis=0)"""
+
+        # self.hist_landmarks = landmarks
+        self.hist_landmarks = observations
+
+    # Associa landmarks não observados ainda
+    def _assign_obsservations(self, landmarks, observations):
+        print("ok")
+        vec_landmarks = None
+
+        return vec_landmarks
 
     # Etapa de predição do estado e covariância
     def _prediction_step(self, odometry, velocity):
@@ -221,115 +255,68 @@ class Mapping():
         # Features observadas como coordenadas cartesianas
         observations = self._observation_model([rx, ry, ra], range_bearings)
 
-        # Landmarks previamente observados
-        n = len(bel_mean[3:])
-        landmarks = np.hstack([
-            bel_mean[3:][np.arange(0, n-1, 2)].reshape(-1, 1),
-            bel_mean[3:][np.arange(1, n, 2)].reshape(-1, 1)])
+        # Associa landmarks não observados ainda
+        # landmarks = self._split_vector(bel_mean[3:])
+        # bel_mean[3:] = self._assign_obsservations(landmarks, observations)
 
-        # Para todas medições
-        for i, zt in enumerate(range_bearings):
-            mx, my = observations[i]
-            n_tot = len(bel_mean)
+        n_tot = len(bel_mean)
+        for j, zk in enumerate(observations):
+            pos = 3 + 2*j
 
-            # Adiciona nova obsevação
-            bel_mean = np.append(bel_mean, [mx, my])
+            mx, my = bel_mean[pos], bel_mean[pos+1]
 
-            # Adiciona linhas e coluna para covariâncias
-            bel_cov = np.vstack([bel_cov, np.zeros((2, n_tot))])
-            bel_cov = np.hstack([bel_cov, np.zeros((n_tot+2, 2))])
-            bel_cov[-2:, -2:] = 1e6*np.eye(2)
+            # Predição do landmark esperado para a feat. observada
+            delta = np.array([mx - rx, my - ry])
+            q = np.dot(delta.T, delta)
+            # print(q)
+            sq = np.sqrt(q)
+            z_theta = np.arctan2(delta[1], delta[0])
+            z_hat = np.array([sq, z_theta-ra])
 
-            # Adiciona observação aos landmarks já observados
-            landmarks = np.vstack([landmarks, [mx, my]])
+            # Computa a matriz Jacobiana dessa observação
+            dx, dy = delta
+            F = np.zeros((5, n_tot))
+            F[:3, :3] = np.eye(3)
+            F[3, pos] = 1
+            F[4, pos+1] = 1
+            Hz = np.array([
+                [-sq*dx, -sq*dy, 0, sq*dx, sq*dy],
+                [dy, -dx, -q, -dy, dx]], dtype=np.float32)
+            H = (np.nan_to_num(1/q)*Hz).dot(F)  # Jacobian matrix ∂ẑ/∂(rx,ry)
 
-            thresh = 50
-            n_tot += 2
-            Z, H, S, M = [], [], [], []
-            # Para todos landmarks + observação
-            for k in range(len(landmarks)):
-                pos = 3 + 2*k
-                mxk, myk = bel_mean[pos], bel_mean[pos+1]
-                if bel_cov[pos, pos] >= 1e6 and bel_cov[pos+1, pos+1] >= 1e6:
-                    bel_mean[pos] = mx
-                    bel_mean[pos+1] = my
+            # Calcula a diferença entre as obsevações reais e preditas
+            z_dif = zk - z_hat
+            # z_dif = (z_dif + np.pi) % (2*np.pi) - np.pi
 
-                # Predição do landmark esperado para a feat. observada
-                delta = np.array([mxk - rx, myk - ry])
-                q = np.dot(delta.T, delta)
-                sq = np.sqrt(q)
-                z_theta = np.arctan2(delta[1], delta[0])
-                z_hat = np.array([sq, z_theta-ra])
-
-                # Computa a matriz Jacobiana ∂ẑ/∂(rx,ry)
-                dx, dy = delta
-                F = np.zeros((5, n_tot))
-                F[:3, :3] = np.eye(3)
-                F[3, pos] = 1
-                F[4, pos+1] = 1
-                Hz = np.array([
-                    [-sq*dx, -sq*dy, 0, sq*dx, sq*dy],
-                    [dy, -dx, -q, -dy, dx]], dtype=np.float32)
-                H.append((np.nan_to_num(1/q)*Hz).dot(F))
-
-                # Calcula a diferença entre as observações reais e preditas
-                z_dif = zt - z_hat
-                z_dif[1] = self._norm_angle(z_dif[1])
-                Z.append(z_dif)
-
-                # Matriz de pesos da covariância predita
-                S.append(np.linalg.inv(H[-1].dot(bel_cov).dot(H[-1].T)+Q))
-
-                # Distância de Mahalanobis
-                M.append(np.dot(Z[-1].T, S[-1].dot(Z[-1])))
+            S = np.linalg.inv(H.dot(bel_cov).dot(H.T)+Q)
+            # M = np.dot(z_dif.T, S.dot(z_dif))  # Mahalanobis dist.
 
             # Atualiza posição com a amostra observada
-            M[-1] = thresh  # threshold
-            j = np.argmin(np.array(M))
+            bel_mean[pos] = mx
+            bel_mean[pos+1] = my
 
             # Calcula o ganho do filtro de Kalman
-            K = bel_cov.dot(H[j].T).dot(S[j])
+            K = bel_cov.dot(H.T).dot(S)
 
             # Atualiza vetor de estados e matriz de covariância
-            bel_mean = bel_mean + (K.dot(Z[j]))
-            bel_cov = (np.eye(len(bel_mean))-K.dot(H[j])).dot(bel_cov)
-
-            # Remove teste de inclusão da observação nos dados
-            if j < len(M)-1:
-                # Remove nova obsevação
-                bel_mean = bel_mean[:-2]
-
-                # Remove linhas e coluna das covariâncias
-                bel_cov = bel_cov[:-2, :-2]
-
-                # Remove landmark de observação
-                landmarks = landmarks[:-1]
+            bel_mean = bel_mean + (K.dot(z_dif))
+            bel_cov = (np.eye(n_tot)-K.dot(H)).dot(bel_cov)
 
         self.bel_mean = bel_mean
         self.bel_cov = bel_cov
-        self.hist_landmarks = landmarks
         mu = self.bel_mean
         print(
             'Updated location\t x: {0:.2} \t y: {1:.2} \t theta: {2:.2}'
             .format(mu[0], mu[1], mu[2]))
-        print("landmarks", len(landmarks))
-
-    # Atualiza histórico de poses
-    def _update_hist_pose(self, pose):
-        if self.hist_poses is None:
-            self.hist_poses = np.array([pose])
-        else:
-            self.hist_poses = np.vstack([self.hist_poses, pose])
 
     # Plota mapa gerado
-    def _plot_map(self):
+    def _plot_map(self, pose, landmarks):
         plt.subplot(131, aspect='equal')
         plt.clf()
 
         fov = self.laser.rad_angle
         mapsize = self.mapsize
-        x = self.hist_poses
-        l_points = self.hist_landmarks
+        x = pose
 
         # Inverte eixos para melhor comparação com Gazebo
         x_id, y_id = 1, 0
@@ -342,7 +329,7 @@ class Mapping():
             dx, dy = dy, dx  # inverte para exibir
             return x, y, dx, dy
 
-        if self.hist_poses is not None:
+        if x is not None:
             max_mapsize = np.max(np.abs(x[:, :2]))*2
             mapsize = max_mapsize if max_mapsize > mapsize else mapsize
 
@@ -368,11 +355,12 @@ class Mapping():
                     color="c")
 
         # Landmarks observadas
-        if l_points is not None:
-            max_mapsize = np.max(np.abs(l_points))*2
+        if landmarks is not None:
+            landmarks = self._split_vector(landmarks)
+            max_mapsize = np.max(np.abs(landmarks))*2
             mapsize = max_mapsize if max_mapsize > mapsize else mapsize
             plt.scatter(
-                l_points[:, x_id], l_points[:, y_id],
+                landmarks[x_id], landmarks[y_id],
                 marker='D', s=12, color=(0, 0, 0))
 
         # Plot
@@ -389,13 +377,12 @@ class Mapping():
     # Atualiza estados
     def update(self):
         if not self.belief:
-            self._belief_init(num_landmarks=len(self.laser_scan))
+            self._belief_init(range_bearings=self.laser_scan)
             self.belief = True
 
         if self.odometry is not None:
             self._prediction_step(self.odometry, self.velocity)
-            self._correction_step(self.laser_scan)
-            self._update_hist_pose(pose=self.bel_mean[:3])
+            self._correction_step(range_bearings=self.laser_scan)
 
         if self.plot:
-            self._plot_map()
+            self._plot_map(pose=self.bel_mean[:3], landmarks=self.bel_mean[3:])
