@@ -14,9 +14,7 @@ def main():
     rospy.init_node('ekf_slam', anonymous=True)
     rate = rospy.Rate(10)  # 10hz
 
-    mapping = Mapping(
-        plot=True, plot_cov=True,
-        dist_thresh_min=0.3, dist_thresh_max=0.4, laser_samples=3)
+    mapping = Mapping(dist_thresh=2, laser_samples=25)
 
     # Espera tópico do laser abrir
     data = None
