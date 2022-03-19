@@ -24,7 +24,7 @@ class SICK_LMS511:
 
 # Mapeia ambiente pela odometria e pontos do sensor
 class Mapping():
-    def __init__(self, plot=False, dist_thresh_min=1, dist_thresh_max=2, laser_samples=10):
+    def __init__(self, plot=True, dist_thresh=1, laser_samples=10):
 
         self.mapsize = 5.0  # tamanho inicial do mapa
         self.plot = plot  # habilita exibição do mapa
@@ -36,8 +36,7 @@ class Mapping():
         self.laser_scan = None  # amostras do laser
 
         # Limiares de distância euclidiana
-        self.dist_thresh_min = dist_thresh_min
-        self.dist_thresh_max = dist_thresh_max
+        self.dist_thresh = dist_thresh
 
         # Sensor laser de alcance
         self.laser = SICK_LMS511()
@@ -111,6 +110,11 @@ class Mapping():
         else:
             self.poses = np.vstack([self.poses, pose])
 
+        rx, ry, ra = pose
+        print(
+            'Pose: \tx: {:.2f} \ty: {:.2f} \ttheta: {:.2f}'
+            .format(rx, ry, ra))
+
     # Atualiza histórico de landmarks
     def _update_landmarks(self, range_bearings):
         pose = self.poses[-1, :]
@@ -120,12 +124,10 @@ class Mapping():
             landmarks = observations
         else:
             dists = distance.cdist(observations, landmarks, metric='euclidean')
-            new_ids_min = np.all(dists > self.dist_thresh_min, axis=1)
-            new_ids_max = np.any(dists < self.dist_thresh_max, axis=1)
-            new_ids = np.logical_and(new_ids_min, new_ids_max)
-            if True in new_ids:
+            new_ids_min = np.all(dists > self.dist_thresh, axis=1)
+            if True in new_ids_min:
                 landmarks = np.append(
-                    landmarks, observations[new_ids, :], axis=0)
+                    landmarks, observations[new_ids_min, :], axis=0)
 
         self.landmarks = landmarks
 
@@ -188,7 +190,7 @@ class Mapping():
         plt.ylim([1.1*-mapsize/2, 1.1*mapsize/2])
         plt.xlabel("Y-gazebo")
         plt.ylabel("X-gazebo")
-        plt.title('Mapeando area...')
+        plt.title('Simple SLAM - Mapeando area...')
         plt.pause(0.001)
         # plt.show()
         self.mapsize = mapsize

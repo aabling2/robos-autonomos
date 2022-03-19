@@ -10,6 +10,9 @@ from sensor_msgs.msg import LaserScan
 # Twist é a velocidade linear e angular
 from geometry_msgs.msg import Twist
 
+# Odometria contendo posição, orientação, vel. linear e angular
+from nav_msgs.msg import Odometry
+
 
 # Modelo do sensor laser
 class SICK_LMS511:
@@ -33,6 +36,7 @@ class Mapping():
         self.hist_poses = None  # poses salvas
         self.hist_landmarks = None  # pontos de detectados para o mapa
         self.laser_scan = None  # amostras do laser
+        self.odometry = None  # odometria
         self.velocity = np.zeros(4)  # vt-1, wt-1, vt, wt
         self.dist_thresh = dist_thresh  # limiar de distância
         self.velocity_noise = 0.001  # ruido para velocidades
@@ -72,6 +76,12 @@ class Mapping():
             callback=self.velocity_callback,
             queue_size=10
         )
+        self.odom_subscriber = rospy.Subscriber(
+            name='/jackal_velocity_controller/odom',
+            data_class=Odometry,
+            callback=self.odom_callback,
+            queue_size=10
+        )
 
     # Callback do LaserScan
     # em '/front/laser'
@@ -95,6 +105,25 @@ class Mapping():
         # Atualiza vetor de velocidades
         self.velocity[2:4] = np.float32([v, yaw_rate])
 
+    # Callback de odometria do robô (posição e orientação)
+    # em '/jackal_velocity_controller/odom'
+    def odom_callback(self, msg):
+
+        # Coordenadas cartesianas
+        current_x = msg.pose.pose.position.x
+        current_y = msg.pose.pose.position.y
+
+        # Quaternion para Euler
+        x = msg.pose.pose.orientation.x
+        y = msg.pose.pose.orientation.y
+        z = msg.pose.pose.orientation.z
+        w = msg.pose.pose.orientation.w
+        t3 = +2.0 * (w * z + x * y)
+        t4 = +1.0 - 2.0 * (y * y + z * z)
+        current_yaw = np.arctan2(t3, t4)
+
+        self.odometry = np.array([current_x, current_y, current_yaw])
+
     # Probabilidades iniciais
     def _belief_init(self, num_landmarks):
         self.bel_mean = np.zeros(3+2*num_landmarks)
@@ -113,32 +142,60 @@ class Mapping():
         return np.array([v, w]) + noise
 
     # Modelos de movimento normal e Jacobiano
-    def _motion_models(self, pose, velocity):
+    def _motion_models(self, pose, method='odometry'):
+        # Posição anterior
         rx0, ry0, ra0 = pose
-        vt0, wt0, vt1, wt1 = velocity
 
-        # Adiciona ruído
-        vt1, wt1 = self._add_noise(vt1, wt1)
+        if method == 'velocity':
+            # Motion pela velocidade
+            vt0, wt0, vt1, wt1 = self.velocity
 
-        # Pré-calcula variáveis
-        vw = vt1/np.sign(wt1) if wt1 != 0 else vt1
-        dw = self._norm_angle(abs(wt1-wt0))
-        radw = self._norm_angle(ra0+dw)
-        ra0 = self._norm_angle(ra0)
+            # Adiciona ruído
+            vt1, wt1 = self._add_noise(vt1, wt1)
 
-        # Motion model
-        motion = np.array([
-            -vw*np.sin(ra0) + vw*np.sin(radw),
-            vw*np.cos(ra0) - vw*np.cos(radw),
-            dw
-        ])
+            # Pré-calcula variáveis
+            # vw = vt1/wt1  # cálculo original
+            vw = vt1/np.sign(wt1) if wt1 != 0 else vt1
+            dw = self._norm_angle(abs(wt1-wt0))
+            radw = self._norm_angle(ra0+dw)
+            ra0 = self._norm_angle(ra0)
 
-        # Jacobian motion model
-        jacobian = np.array([
-            [0, 0, -vw*np.cos(ra0) + vw*np.cos(radw)],
-            [0, 0, -vw*np.sin(ra0) + vw*np.sin(radw)],
-            [0, 0, 0]
-        ])
+            # Motion model
+            motion = np.array([
+                -vw*np.sin(ra0) + vw*np.sin(radw),
+                vw*np.cos(ra0) - vw*np.cos(radw),
+                dw
+            ])
+
+            # Jacobian motion model
+            jacobian = np.array([
+                [0, 0, -vw*np.cos(ra0) + vw*np.cos(radw)],
+                [0, 0, -vw*np.sin(ra0) + vw*np.sin(radw)],
+                [0, 0, 0]
+            ])
+
+        elif method == 'odometry':
+            # Motion pela odometria
+            rx1, ry1, ra1 = self.odometry
+            wt0 = self.velocity[1]
+            vt1 = np.linalg.norm(self.odometry[:2]-pose[:2])
+            wt1 = self._norm_angle(ra1 - ra0)
+
+            # Adiciona ruído
+            vt1, wt1 = self._add_noise(vt1, wt1)
+
+            # Pré-calcula variáveis
+            dx, dy, dw = self.odometry - pose
+
+            # Motion model
+            motion = np.array([dx, dy, self._norm_angle(abs(dw))])
+
+            # Jacobian motion model
+            jacobian = np.array([
+                [0, 0, -dy],
+                [0, 0, dx],
+                [0, 0, 0]
+            ])
 
         # Atualiza velocidade anterior
         self.velocity[:2] = vt1, wt1
@@ -160,7 +217,7 @@ class Mapping():
         return np.hstack([mx, my])
 
     # Etapa de predição do estado e covariância
-    def _prediction_step(self, velocity):
+    def _prediction_step(self):
         bel_mean = self.bel_mean
         bel_cov = self.bel_cov
         n = len(bel_mean)
@@ -168,10 +225,11 @@ class Mapping():
         F = np.hstack([np.eye(3), np.zeros((3, n-3))])
 
         # Define modelos de movimento normal e Jacobiano
-        motion, J = self._motion_models(bel_mean[:3], velocity)
+        motion, J = self._motion_models(bel_mean[:3])
 
         # Predição do novo estado do robô
         self.bel_mean = bel_mean + (F.T).dot(motion)
+        self.bel_mean[:3] = self.odometry  # adicional, melhora precisão pose
 
         # Predição da nova covariância
         G = np.eye(n) + np.dot(F.T, J.dot(F))
@@ -263,7 +321,7 @@ class Mapping():
         self.bel_cov = bel_cov
         mu = self.bel_mean
         print(
-            'Pred./Corr.'
+            'Pred./Corr.:'
             '\tx: {:.2f}/{:.2f}'
             '\ty: {:.2f}/{:.2f}'
             '\ttheta: {:.2f}/{:.2f}'
@@ -351,7 +409,7 @@ class Mapping():
         plt.ylim([1.1*-mapsize/2, 1.1*mapsize/2])
         plt.xlabel("Y-gazebo")
         plt.ylabel("X-gazebo")
-        plt.title('Mapeando area...')
+        plt.title('EKF SLAM - Mapeando area...')
         plt.pause(0.001)
 
         # Atualiza tamanho do mapa
@@ -363,8 +421,8 @@ class Mapping():
             self._belief_init(num_landmarks=len(self.laser_scan))
             self.belief = True
 
-        if self.laser_scan is not None:
-            self._prediction_step(self.velocity)
+        if self.laser_scan is not None and self.odometry is not None:
+            self._prediction_step()
             self._correction_step(self.laser_scan)
             self._update_hist_pose(pose=self.bel_mean[:3])
             self._update_hist_landmarks(measurement=self.bel_mean[3:])

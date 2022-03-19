@@ -1,10 +1,17 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import os
 import rospy
-from ekf_mapping import Mapping
+from ekf_mapping import Mapping as EKF_map
+from simple_mapping import Mapping as Simple_map
 
 # Amostras de distâncias obtidas pelo LaserScan
 from sensor_msgs.msg import LaserScan
+
+METHOD = os.environ.get('MAP_METHOD')
+if METHOD == '':
+    METHOD = 'ekf'
+print("method", METHOD)
 
 
 def main():
@@ -14,7 +21,10 @@ def main():
     rospy.init_node('ekf_slam', anonymous=True)
     rate = rospy.Rate(10)  # 10hz
 
-    mapping = Mapping(dist_thresh=2, laser_samples=25)
+    if METHOD == 'simple':
+        mapping = Simple_map(dist_thresh=0.5, laser_samples=25)
+    elif METHOD == 'ekf':
+        mapping = EKF_map(dist_thresh=0.5, laser_samples=25)
 
     # Espera tópico do laser abrir
     data = None
