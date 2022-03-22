@@ -24,9 +24,12 @@ class SICK_LMS511:
 
 # Mapeia ambiente pela odometria e pontos do sensor
 class Mapping():
-    def __init__(self, plot=True, dist_thresh=1, laser_samples=10):
+    def __init__(self, plot=True, dist_thresh=1, laser_samples=10,
+                 map_size=5.0, offset=[0, 0], draw_map=None):
 
-        self.mapsize = 5.0  # tamanho inicial do mapa
+        self.mapsize = map_size  # tamanho inicial do mapa
+        self.offset = offset  # offset do mapa
+        self.map = draw_map  # Representação do mapa
         self.plot = plot  # habilita exibição do mapa
         self.endpoint = False  # flag de ponto final
 
@@ -137,9 +140,9 @@ class Mapping():
         plt.clf()
 
         fov = self.laser.rad_angle
-        mapsize = self.mapsize
         x = self.poses
         l_points = self.landmarks
+        mapsize = self.mapsize
 
         # Inverte eixos para melhor comparação com Gazebo
         x_id, y_id = 1, 0
@@ -152,10 +155,11 @@ class Mapping():
             dx, dy = dy, dx  # inverte para exibir
             return x, y, dx, dy
 
-        if self.poses is not None:
-            max_mapsize = np.max(np.abs(x[:, :2]))*2
-            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
+        # Representação do mapa
+        if self.map is not None:
+            plt.plot(self.map[:, x_id], self.map[:, y_id], color="lightgrey")
 
+        if self.poses is not None:
             # Posição e sentido do robô
             plt.arrow(*state_arrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
 
@@ -179,21 +183,19 @@ class Mapping():
 
         # Landmarks observadas
         if l_points is not None:
-            max_mapsize = np.max(np.abs(l_points))*2
-            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
             plt.scatter(
                 l_points[:, x_id], l_points[:, y_id],
                 marker='D', s=12, color=(0, 0, 0))
 
         # Plot
-        plt.xlim([1.1*mapsize/2, 1.1*-mapsize/2])
-        plt.ylim([1.1*-mapsize/2, 1.1*mapsize/2])
+        offset = self.offset
+        plt.xlim([(1.1*mapsize/2)+offset[x_id], (1.1*-mapsize/2)+offset[x_id]])
+        plt.ylim([(1.1*-mapsize/2)+offset[y_id], (1.1*mapsize/2)+offset[y_id]])
         plt.xlabel("Y-gazebo")
         plt.ylabel("X-gazebo")
         plt.title('Simple SLAM - Mapeando area...')
         plt.pause(0.001)
         # plt.show()
-        self.mapsize = mapsize
 
     # Atualiza estados
     def update(self):

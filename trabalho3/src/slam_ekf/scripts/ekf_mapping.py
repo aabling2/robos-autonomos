@@ -26,10 +26,12 @@ class SICK_LMS511:
 
 # Mapeia ambiente pela odometria e pontos do sensor
 class Mapping():
-    def __init__(self, plot=True, plot_cov=True,
-                 dist_thresh=1, laser_samples=10):
+    def __init__(self, plot=True, plot_cov=True, map_size=5.0, offset=[0, 0],
+                 dist_thresh=1, laser_samples=10, draw_map=None):
 
-        self.mapsize = 5.0  # tamanho inicial do mapa
+        self.mapsize = map_size  # tamanho inicial do mapa
+        self.offset = offset  # offset do mapa
+        self.map = draw_map  # Representação do mapa
         self.plot = plot  # habilita exibição do mapa
         self.plot_cov = plot_cov  # habilita exibição das incertezas
         self.endpoint = False  # flag de ponto final
@@ -59,8 +61,8 @@ class Mapping():
         self.bel_mean = None
         self.bel_cov = None
         self.hist_mu = []
-        self.R = np.diagflat([0.1, 0.05, 0.05])
-        self.Q = np.diagflat([0.5, 0.5])  # Sensor noisy
+        self.R = 0.01*np.diagflat([1, 1, 1])  # process noise cov.
+        self.Q = 0.01*np.diagflat([1, 1])  # measurement noise cov.
 
     # Tópicos de comunicação
     def _init_topics(self):
@@ -137,9 +139,12 @@ class Mapping():
             angle -= 2 * np.pi
         return angle
 
-    def _add_noise(self, v, w):
-        noise = np.random.normal(0, self.velocity_noise, 2)
-        return np.array([v, w]) + noise
+    def _add_noise(self, values):
+        noise = np.random.normal(
+            -self.velocity_noise,
+            self.velocity_noise,
+            len(values))
+        return np.array(values) + noise
 
     # Modelos de movimento normal e Jacobiano
     def _motion_models(self, pose, method='odometry'):
@@ -151,7 +156,7 @@ class Mapping():
             vt0, wt0, vt1, wt1 = self.velocity
 
             # Adiciona ruído
-            vt1, wt1 = self._add_noise(vt1, wt1)
+            vt1, wt1 = self._add_noise([vt1, wt1])
 
             # Pré-calcula variáveis
             # vw = vt1/wt1  # cálculo original
@@ -176,26 +181,29 @@ class Mapping():
 
         elif method == 'odometry':
             # Motion pela odometria
-            rx1, ry1, ra1 = self.odometry
-            wt0 = self.velocity[1]
-            vt1 = np.linalg.norm(self.odometry[:2]-pose[:2])
-            wt1 = self._norm_angle(ra1 - ra0)
+            diff = self.odometry - pose
+            vt1 = np.sqrt(diff[0]**2 + diff[1]**2)
+            wt0 = np.arctan2(diff[1], diff[0]) - ra0
+            wt1 = self._norm_angle(diff[2] - wt0)
 
             # Adiciona ruído
-            vt1, wt1 = self._add_noise(vt1, wt1)
+            vt1, wt0, wt1 = self._add_noise([vt1, wt0, wt1])
 
             # Pré-calcula variáveis
-            dx, dy, dw = self.odometry - pose
+            daw = self._norm_angle(ra0+wt0)
+            dww = self._norm_angle(wt0+wt1)
 
             # Motion model
-            motion = np.array([dx, dy, self._norm_angle(abs(dw))])
+            motion = np.array([
+                vt1*np.cos(daw),
+                vt1*np.sin(daw),
+                dww])
 
             # Jacobian motion model
             jacobian = np.array([
-                [0, 0, -dy],
-                [0, 0, dx],
-                [0, 0, 0]
-            ])
+                [0, 0, -vt1*np.sin(daw)],
+                [0, 0, vt1*np.cos(daw)],
+                [0, 0, 0]])
 
         # Atualiza velocidade anterior
         self.velocity[:2] = vt1, wt1
@@ -229,7 +237,7 @@ class Mapping():
 
         # Predição do novo estado do robô
         self.bel_mean = bel_mean + (F.T).dot(motion)
-        self.bel_mean[:3] = self.odometry  # adicional, melhora precisão pose
+        # self.bel_mean[:3] = self.odometry  # adicional, melhora precisão pose
 
         # Predição da nova covariância
         G = np.eye(n) + np.dot(F.T, J.dot(F))
@@ -350,9 +358,9 @@ class Mapping():
         plt.clf()
 
         fov = self.laser.rad_angle
-        mapsize = self.mapsize
         x = self.hist_poses
         l_points = self.hist_landmarks
+        mapsize = self.mapsize
 
         # Inverte eixos para melhor comparação com Gazebo
         x_id, y_id = 1, 0
@@ -365,10 +373,11 @@ class Mapping():
             dx, dy = dy, dx  # inverte para exibir
             return x, y, dx, dy
 
-        if self.hist_poses is not None:
-            max_mapsize = np.max(np.abs(x[:, :2]))*2
-            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
+        # Representação do mapa
+        if self.map is not None:
+            plt.plot(self.map[:, x_id], self.map[:, y_id], color="lightgrey")
 
+        if self.hist_poses is not None:
             # Posição e sentido do robô
             plt.arrow(*state_arrow(x[-1, :]), head_width=0.2, color=(1, 0, 1))
 
@@ -392,28 +401,25 @@ class Mapping():
 
         # Landmarks observadas
         if l_points is not None:
-            max_mapsize = np.max(np.abs(l_points))*2
-            mapsize = max_mapsize if max_mapsize > mapsize else mapsize
             plt.scatter(
                 l_points[:, x_id], l_points[:, y_id],
                 marker='D', s=12, color=(0, 0, 0))
 
+            # Confiança da observação
             if self.plot_cov:
-                for i, [ly, lx] in enumerate(l_points):
-                    cov = 100*int(self.bel_cov[3+i, 3+i])
-                    plt.scatter(
-                        lx, ly, s=cov, facecolors='none', edgecolors='b')
+                covs = 100*(np.diagonal(self.bel_cov)[3:])
+                plt.scatter(
+                    l_points[:, x_id], l_points[:, y_id], s=np.max(covs)-covs,
+                    facecolors='none', edgecolors='b')
 
         # Plot
-        plt.xlim([1.1*mapsize/2, 1.1*-mapsize/2])
-        plt.ylim([1.1*-mapsize/2, 1.1*mapsize/2])
+        offset = self.offset
+        plt.xlim([(1.1*mapsize/2)+offset[x_id], (1.1*-mapsize/2)+offset[x_id]])
+        plt.ylim([(1.1*-mapsize/2)+offset[y_id], (1.1*mapsize/2)+offset[y_id]])
         plt.xlabel("Y-gazebo")
         plt.ylabel("X-gazebo")
         plt.title('EKF SLAM - Mapeando area...')
         plt.pause(0.001)
-
-        # Atualiza tamanho do mapa
-        self.mapsize = mapsize
 
     # Atualiza estados
     def update(self):

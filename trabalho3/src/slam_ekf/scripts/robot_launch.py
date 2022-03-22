@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import os
 import rospy
+import numpy as np
 from ekf_mapping import Mapping as EKF_map
 from simple_mapping import Mapping as Simple_map
 
@@ -10,7 +11,7 @@ from sensor_msgs.msg import LaserScan
 
 METHOD = os.environ.get('MAP_METHOD')
 if METHOD == '':
-    METHOD = 'ekf'
+    METHOD = 'simple'
 print("method", METHOD)
 
 
@@ -21,10 +22,27 @@ def main():
     rospy.init_node('ekf_slam', anonymous=True)
     rate = rospy.Rate(10)  # 10hz
 
+    # Coordenadas de representação do mapa 0
+    offset = np.array([-1.5, -1.6])
+    draw_map = offset + np.array([
+        [0., 0.],
+        [7.7, 0.],
+        [7.7, 7.7],
+        [4.85, 7.7],
+        [4.85, 9.7],
+        [2.85, 9.7],
+        [2.85, 7.7],
+        [0., 7.7],
+        [0., 0.]])
+
     if METHOD == 'simple':
-        mapping = Simple_map(dist_thresh=0.5, laser_samples=25)
+        mapping = Simple_map(
+            dist_thresh=0.2, laser_samples=25,
+            map_size=10, offset=[2.5, 3.2], draw_map=draw_map)
     elif METHOD == 'ekf':
-        mapping = EKF_map(dist_thresh=0.5, laser_samples=25)
+        mapping = EKF_map(
+            dist_thresh=1.7, laser_samples=25,
+            map_size=10, offset=[2.5, 3.2], draw_map=draw_map, plot_cov=False)
 
     # Espera tópico do laser abrir
     data = None
